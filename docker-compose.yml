@@ -9,7 +9,7 @@ services:
     depends_on:
       - photo-browser
     ports:
-      - "8080:80"
+      - "8180:80"
       - "8443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
