@@ -1,8 +1,4 @@
-{
-  email {$ACME_EMAIL}
-}
-
-{$PHOTOS_HOST} {
+:80 {
   encode zstd gzip
 
   basic_auth {
