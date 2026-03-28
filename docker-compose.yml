@@ -1,0 +1,36 @@
+name: photo-browser
+
+services:
+  caddy:
+    container_name: photos_caddy
+    image: caddy:2.8-alpine
+    env_file:
+      - .env
+    depends_on:
+      - photo-browser
+    ports:
+      - "8080:80"
+      - "8443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+  photo-browser:
+    container_name: photo_browser
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      PHOTOS_ROOT: /photos
+      PORT: "3333"
+    volumes:
+      - /mnt/nas/Photos:/photos:ro
+      - thumb_cache:/app/.thumbcache
+    restart: unless-stopped
+
+volumes:
+  caddy_config:
+  caddy_data:
+  thumb_cache:

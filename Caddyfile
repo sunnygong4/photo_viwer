@@ -1,0 +1,13 @@
+{
+  email {$ACME_EMAIL}
+}
+
+{$PHOTOS_HOST} {
+  encode zstd gzip
+
+  basic_auth {
+    {$ADMIN_USER} {$ADMIN_HASH}
+  }
+
+  reverse_proxy photo-browser:3333
+}
