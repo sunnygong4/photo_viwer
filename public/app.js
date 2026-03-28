@@ -9,10 +9,15 @@ const lightbox = document.getElementById("lightbox");
 const lightboxImg = document.getElementById("lightbox-img");
 const lightboxInfo = document.getElementById("lightbox-info");
 const lightboxSpinner = document.getElementById("lightbox-spinner");
+const filmStrip = document.getElementById("film-strip");
 
 // Current route context for lightbox full-size URLs
 let currentMonth = "";
 let currentDay = "";
+
+// Zoom/drag state
+let zoomed = false;
+let dragState = { dragging: false, startX: 0, startY: 0, scrollX: 0, scrollY: 0 };
 
 // --- Routing ---
 
@@ -45,6 +50,18 @@ function setBreadcrumb(parts) {
   breadcrumb.innerHTML = html;
 }
 
+// --- Helper: build thumb/photo URL ---
+
+function thumbUrl(filename) {
+  if (currentDay) return `/api/thumb/${currentMonth}/${currentDay}/${filename}`;
+  return `/api/thumb/${currentMonth}/${filename}`;
+}
+
+function photoUrl(filename) {
+  if (currentDay) return `/api/photo/${currentMonth}/${currentDay}/${filename}`;
+  return `/api/photo/${currentMonth}/${filename}`;
+}
+
 // --- Views ---
 
 async function loadRoot() {
@@ -73,14 +90,24 @@ async function loadRoot() {
 
 async function loadMonth(month) {
   setBreadcrumb([month]);
-  content.innerHTML = '<div class="loading-msg">Loading folders...</div>';
+  content.innerHTML = '<div class="loading-msg">Loading...</div>';
 
-  const folders = await fetch(`/api/folders/${month}`).then((r) => r.json());
+  const data = await fetch(`/api/folders/${month}`).then((r) => r.json());
 
+  // If this folder has photos directly (no subfolders)
+  if (data.type === "photos") {
+    currentMonth = month;
+    currentDay = "";
+    currentFiles = data.files;
+    renderMasonry(data.files);
+    return;
+  }
+
+  // Otherwise show subfolders
   const grid = document.createElement("div");
   grid.className = "folder-grid";
 
-  for (const item of folders) {
+  for (const item of data.items) {
     const card = document.createElement("div");
     card.className = "folder-card";
     card.innerHTML = `
@@ -106,7 +133,10 @@ async function loadDay(month, day) {
     r.json()
   );
   currentFiles = files;
+  renderMasonry(files);
+}
 
+function renderMasonry(files) {
   if (files.length === 0) {
     content.innerHTML =
       '<div class="loading-msg">No JPEG files in this folder.</div>';
@@ -116,7 +146,6 @@ async function loadDay(month, day) {
   const masonry = document.createElement("div");
   masonry.className = "masonry";
 
-  // IntersectionObserver for lazy loading
   const observer = new IntersectionObserver(
     (entries) => {
       for (const entry of entries) {
@@ -136,12 +165,11 @@ async function loadDay(month, day) {
     item.className = "masonry-item";
 
     const img = document.createElement("img");
-    img.dataset.src = `/api/thumb/${month}/${day}/${filename}`;
+    img.dataset.src = thumbUrl(filename);
     img.alt = filename;
     img.loading = "lazy";
     img.onload = () => {
       img.classList.add("loaded");
-      // Remove min-height once loaded so masonry reflows correctly
       item.style.minHeight = "";
     };
 
@@ -162,13 +190,16 @@ async function loadDay(month, day) {
 function openLightbox(index) {
   lightboxIndex = index;
   lightbox.classList.remove("hidden");
+  resetZoom();
   loadLightboxImage(index);
+  buildFilmStrip();
   document.body.style.overflow = "hidden";
 }
 
 function closeLightbox() {
   lightbox.classList.add("hidden");
   lightboxImg.src = "";
+  resetZoom();
   document.body.style.overflow = "";
 }
 
@@ -176,14 +207,16 @@ function loadLightboxImage(index) {
   const filename = currentFiles[index];
   lightboxSpinner.classList.remove("hidden");
   lightboxImg.style.opacity = "0";
+  resetZoom();
 
   lightboxImg.onload = () => {
     lightboxSpinner.classList.add("hidden");
     lightboxImg.style.opacity = "1";
   };
 
-  lightboxImg.src = `/api/photo/${currentMonth}/${currentDay}/${filename}`;
+  lightboxImg.src = photoUrl(filename);
   lightboxInfo.textContent = `${filename}  (${index + 1} / ${currentFiles.length})`;
+  updateFilmStripHighlight();
 }
 
 function lightboxPrev() {
@@ -200,7 +233,123 @@ function lightboxNext() {
   }
 }
 
-// Lightbox event listeners
+// --- Film Strip ---
+
+function buildFilmStrip() {
+  filmStrip.innerHTML = "";
+  const observer = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          const img = entry.target;
+          img.src = img.dataset.src;
+          observer.unobserve(img);
+        }
+      }
+    },
+    { root: filmStrip, rootMargin: "200px" }
+  );
+
+  for (let i = 0; i < currentFiles.length; i++) {
+    const thumb = document.createElement("div");
+    thumb.className = "film-thumb";
+    thumb.dataset.index = i;
+
+    const img = document.createElement("img");
+    img.dataset.src = thumbUrl(currentFiles[i]);
+    img.alt = currentFiles[i];
+
+    const idx = i;
+    thumb.onclick = (e) => {
+      e.stopPropagation();
+      lightboxIndex = idx;
+      loadLightboxImage(idx);
+    };
+
+    thumb.appendChild(img);
+    filmStrip.appendChild(thumb);
+    observer.observe(img);
+  }
+
+  updateFilmStripHighlight();
+}
+
+function updateFilmStripHighlight() {
+  const thumbs = filmStrip.querySelectorAll(".film-thumb");
+  thumbs.forEach((t, i) => {
+    t.classList.toggle("active", i === lightboxIndex);
+  });
+
+  // Scroll active thumb into view
+  const active = filmStrip.querySelector(".film-thumb.active");
+  if (active) {
+    active.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+  }
+}
+
+// --- Zoom & Drag ---
+
+const imgContainer = document.getElementById("lightbox-img-container");
+
+function resetZoom() {
+  zoomed = false;
+  lightboxImg.classList.remove("zoomed");
+  imgContainer.scrollLeft = 0;
+  imgContainer.scrollTop = 0;
+  imgContainer.classList.remove("zoomed");
+}
+
+function toggleZoom(e) {
+  if (zoomed) {
+    resetZoom();
+  } else {
+    zoomed = true;
+    lightboxImg.classList.add("zoomed");
+    imgContainer.classList.add("zoomed");
+
+    // Center scroll on the double-click point
+    requestAnimationFrame(() => {
+      const rect = imgContainer.getBoundingClientRect();
+      const clickX = (e.clientX - rect.left) / rect.width;
+      const clickY = (e.clientY - rect.top) / rect.height;
+      imgContainer.scrollLeft = (imgContainer.scrollWidth - rect.width) * clickX;
+      imgContainer.scrollTop = (imgContainer.scrollHeight - rect.height) * clickY;
+    });
+  }
+}
+
+imgContainer.addEventListener("dblclick", (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  toggleZoom(e);
+});
+
+// Drag to pan when zoomed
+imgContainer.addEventListener("mousedown", (e) => {
+  if (!zoomed) return;
+  e.preventDefault();
+  dragState.dragging = true;
+  dragState.startX = e.clientX;
+  dragState.startY = e.clientY;
+  dragState.scrollX = imgContainer.scrollLeft;
+  dragState.scrollY = imgContainer.scrollTop;
+  imgContainer.style.cursor = "grabbing";
+});
+
+window.addEventListener("mousemove", (e) => {
+  if (!dragState.dragging) return;
+  imgContainer.scrollLeft = dragState.scrollX - (e.clientX - dragState.startX);
+  imgContainer.scrollTop = dragState.scrollY - (e.clientY - dragState.startY);
+});
+
+window.addEventListener("mouseup", () => {
+  if (!dragState.dragging) return;
+  dragState.dragging = false;
+  imgContainer.style.cursor = "";
+});
+
+// --- Lightbox event listeners ---
+
 document.getElementById("lightbox-backdrop").onclick = closeLightbox;
 document.getElementById("lightbox-close").onclick = closeLightbox;
 document.getElementById("lightbox-prev").onclick = (e) => {
@@ -217,7 +366,11 @@ document.addEventListener("keydown", (e) => {
 
   switch (e.key) {
     case "Escape":
-      closeLightbox();
+      if (zoomed) {
+        resetZoom();
+      } else {
+        closeLightbox();
+      }
       break;
     case "ArrowLeft":
       lightboxPrev();

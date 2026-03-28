@@ -65,6 +65,7 @@ app.get("/api/folders", async (_req, res) => {
 });
 
 // GET /api/folders/:month - list subfolders within a month
+// If the folder has no subfolders (e.g. 2023.10.x), return JPEGs directly
 app.get("/api/folders/:month", async (req, res) => {
   const { month } = req.params;
   if (!safePath(month)) return res.status(400).json({ error: "Invalid path" });
@@ -77,6 +78,12 @@ app.get("/api/folders/:month", async (req, res) => {
       .map((e) => e.name)
       .sort()
       .reverse();
+
+    // If no subfolders, return photos directly in this folder
+    const jpegs = entries.filter((e) => e.isFile() && isJpeg(e.name)).map((e) => e.name).sort();
+    if (folders.length === 0 && jpegs.length > 0) {
+      return res.json({ type: "photos", files: jpegs });
+    }
 
     // Also count JPEGs in each subfolder for display
     const result = await Promise.all(
@@ -91,7 +98,7 @@ app.get("/api/folders/:month", async (req, res) => {
       })
     );
 
-    res.json(result);
+    res.json({ type: "folders", items: result });
   } catch (err) {
     res.status(500).json({ error: "Failed to read folder" });
   }
@@ -110,6 +117,78 @@ app.get("/api/folders/:month/:day", async (req, res) => {
     res.json(jpegs);
   } catch (err) {
     res.status(500).json({ error: "Failed to read day folder" });
+  }
+});
+
+// GET /api/thumb/:month/:filename - serve thumbnail for photos directly in month folder
+app.get("/api/thumb/:month/:filename", async (req, res) => {
+  const { month, filename } = req.params;
+  if (!safePath(month) || !safePath(filename))
+    return res.status(400).json({ error: "Invalid path" });
+
+  if (!isJpeg(filename)) return res.status(400).json({ error: "Not a JPEG" });
+
+  const srcPath = path.join(PHOTOS_ROOT, month, filename);
+  const cacheDir = path.join(CACHE_DIR, month);
+  const cachePath = path.join(cacheDir, filename);
+
+  const sendJpeg = (filePath: string) => {
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    res.setHeader("Content-Type", "image/jpeg");
+    createReadStream(filePath).pipe(res);
+  };
+
+  try {
+    await fs.access(cachePath);
+    return sendJpeg(cachePath);
+  } catch {}
+
+  try {
+    await fs.access(srcPath);
+  } catch {
+    return res.status(404).json({ error: "Source file not found" });
+  }
+
+  try {
+    await acquireSemaphore();
+    try {
+      try {
+        await fs.access(cachePath);
+        return sendJpeg(cachePath);
+      } catch {}
+
+      await fs.mkdir(cacheDir, { recursive: true });
+      await sharp(srcPath)
+        .rotate()
+        .resize(THUMB_WIDTH, null, { withoutEnlargement: true })
+        .jpeg({ quality: THUMB_QUALITY })
+        .toFile(cachePath);
+
+      sendJpeg(cachePath);
+    } finally {
+      releaseSemaphore();
+    }
+  } catch (err) {
+    console.error(`Thumbnail error for ${srcPath}:`, err);
+    res.status(500).json({ error: "Failed to generate thumbnail" });
+  }
+});
+
+// GET /api/photo/:month/:filename - serve full-size photo from month folder
+app.get("/api/photo/:month/:filename", async (req, res) => {
+  const { month, filename } = req.params;
+  if (!safePath(month) || !safePath(filename))
+    return res.status(400).json({ error: "Invalid path" });
+
+  const filePath = path.join(PHOTOS_ROOT, month, filename);
+
+  try {
+    await fs.access(filePath);
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.setHeader("Content-Type", "image/jpeg");
+    createReadStream(filePath).pipe(res);
+  } catch {
+    res.status(404).json({ error: "File not found" });
   }
 });
 
