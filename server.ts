@@ -9,7 +9,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PHOTOS_ROOT = process.env.PHOTOS_ROOT || "Z:/Photos";
 const CACHE_DIR = path.join(__dirname, ".thumbcache");
 const THUMB_WIDTH = 400;
-const THUMB_QUALITY = 75;
+const THUMB_QUALITY = 60;
 const PORT = parseInt(process.env.PORT || "3333");
 const MAX_CONCURRENT = 4;
 
@@ -48,6 +48,19 @@ function isJpeg(filename: string): boolean {
 }
 
 const app = express();
+
+// CORS for desktop app
+app.use((_req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  next();
+});
+
+// Parse thumbnail size/quality from query params
+function parseThumbParams(query: any) {
+  const w = Math.min(800, Math.max(20, parseInt(query.w as string) || THUMB_WIDTH));
+  const q = Math.min(95, Math.max(20, parseInt(query.q as string) || THUMB_QUALITY));
+  return { w, q, sizeKey: `w${w}q${q}` };
+}
 
 // --- /api/tree endpoint with caching ---
 const MONTH_PATTERN = /^\d{4}\.\d{2}\.x$/;
@@ -213,8 +226,9 @@ app.get("/api/thumb/:month/:filename", async (req, res) => {
 
   if (!isJpeg(filename)) return res.status(400).json({ error: "Not a JPEG" });
 
+  const { w, q, sizeKey } = parseThumbParams(req.query);
   const srcPath = path.join(PHOTOS_ROOT, month, filename);
-  const cacheDir = path.join(CACHE_DIR, month);
+  const cacheDir = path.join(CACHE_DIR, month, sizeKey);
   const cachePath = path.join(cacheDir, filename);
 
   const sendJpeg = (filePath: string) => {
@@ -245,8 +259,8 @@ app.get("/api/thumb/:month/:filename", async (req, res) => {
       await fs.mkdir(cacheDir, { recursive: true });
       await sharp(srcPath)
         .rotate()
-        .resize(THUMB_WIDTH, null, { withoutEnlargement: true })
-        .jpeg({ quality: THUMB_QUALITY })
+        .resize(w, null, { withoutEnlargement: true })
+        .jpeg({ quality: q })
         .toFile(cachePath);
 
       sendJpeg(cachePath);
@@ -285,8 +299,9 @@ app.get("/api/thumb/:month/:day/:filename", async (req, res) => {
 
   if (!isJpeg(filename)) return res.status(400).json({ error: "Not a JPEG" });
 
+  const { w, q, sizeKey } = parseThumbParams(req.query);
   const srcPath = path.join(PHOTOS_ROOT, month, day, filename);
-  const cacheDir = path.join(CACHE_DIR, month, day);
+  const cacheDir = path.join(CACHE_DIR, month, day, sizeKey);
   const cachePath = path.join(cacheDir, filename);
 
   const sendJpeg = (filePath: string) => {
@@ -295,13 +310,10 @@ app.get("/api/thumb/:month/:day/:filename", async (req, res) => {
     createReadStream(filePath).pipe(res);
   };
 
-  // Try serving from cache first
   try {
     await fs.access(cachePath);
     return sendJpeg(cachePath);
-  } catch {
-    // Cache miss - generate thumbnail
-  }
+  } catch {}
 
   try {
     await fs.access(srcPath);
@@ -312,19 +324,16 @@ app.get("/api/thumb/:month/:day/:filename", async (req, res) => {
   try {
     await acquireSemaphore();
     try {
-      // Double-check cache (another request may have generated it)
       try {
         await fs.access(cachePath);
         return sendJpeg(cachePath);
-      } catch {
-        // Still a cache miss, proceed
-      }
+      } catch {}
 
       await fs.mkdir(cacheDir, { recursive: true });
       await sharp(srcPath)
-        .rotate() // Auto-orient from EXIF
-        .resize(THUMB_WIDTH, null, { withoutEnlargement: true })
-        .jpeg({ quality: THUMB_QUALITY })
+        .rotate()
+        .resize(w, null, { withoutEnlargement: true })
+        .jpeg({ quality: q })
         .toFile(cachePath);
 
       sendJpeg(cachePath);

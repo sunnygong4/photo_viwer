@@ -1,4 +1,9 @@
 // ===========================================
+// Config (for desktop app support)
+// ===========================================
+const API_BASE = window.__SCLOUD_CONFIG?.apiBase || '';
+
+// ===========================================
 // State
 // ===========================================
 let currentFiles = [];
@@ -7,6 +12,7 @@ let currentMonth = "";
 let currentDay = "";
 let zoomed = false;
 let dragState = { dragging: false, startX: 0, startY: 0, scrollX: 0, scrollY: 0 };
+let currentThumbTier = null;
 
 // Gallery state
 let treeData = null;
@@ -37,15 +43,17 @@ async function init() {
   gallery.innerHTML = '<div class="loading-msg">Loading photo library...</div>';
 
   // Restore zoom
-  const savedZoom = localStorage.getItem("gridCols");
-  if (savedZoom) {
-    const cols = parseInt(savedZoom);
-    zoomSlider.value = cols;
+  const savedCols = localStorage.getItem("gridCols");
+  if (savedCols) {
+    const cols = parseInt(savedCols);
+    zoomSlider.value = colsToSlider(cols);
     document.documentElement.style.setProperty("--grid-cols", cols);
+    updateExtremeZoomClass(cols);
   }
+  currentThumbTier = JSON.stringify(getThumbParams());
 
   try {
-    const res = await fetch("/api/tree");
+    const res = await fetch(API_BASE + "/api/tree");
     treeData = await res.json();
     photoCount.textContent = `Photos (${treeData.totalPhotos.toLocaleString()})`;
     buildGallery(treeData);
@@ -153,15 +161,54 @@ function buildGallery(tree) {
   }
 }
 
+// ===========================================
+// Non-linear zoom mapping (slider 0-100 → cols 2-500)
+// ===========================================
+
+function sliderToCols(val) {
+  const t = val / 100;
+  if (t <= 0.7) {
+    // slider 0-70 → cols 2-20 (fine control)
+    return Math.round(2 + 18 * (t / 0.7));
+  } else {
+    // slider 70-100 → cols 20-500 (quadratic)
+    const t2 = (t - 0.7) / 0.3;
+    return Math.round(20 + 480 * t2 * t2);
+  }
+}
+
+function colsToSlider(cols) {
+  if (cols <= 20) {
+    return Math.round(((cols - 2) / 18) * 70);
+  } else {
+    const t2 = Math.sqrt((cols - 20) / 480);
+    return Math.round(70 + t2 * 30);
+  }
+}
+
 function getGridCols() {
-  return parseInt(zoomSlider.value) || 5;
+  return sliderToCols(parseInt(zoomSlider.value) || 12);
 }
 
 function getCellSize() {
   const cols = getGridCols();
-  const gap = 2;
+  const gap = cols > 50 ? 0 : 2;
   const w = window.innerWidth || 1280;
   return (w - gap * (cols - 1)) / cols;
+}
+
+// Adaptive thumbnail tier based on column count
+function getThumbParams() {
+  const cols = getGridCols();
+  if (cols > 50) return { w: 50, q: 45 };
+  if (cols > 20) return { w: 100, q: 50 };
+  return null; // default server quality
+}
+
+function thumbQueryString() {
+  const p = getThumbParams();
+  if (!p) return '';
+  return `?w=${p.w}&q=${p.q}`;
 }
 
 function updatePlaceholderHeight(grid, count) {
@@ -254,10 +301,10 @@ async function loadSection(grid) {
   if (!files) {
     try {
       if (day) {
-        const res = await fetch(`/api/folders/${month}/${day}`);
+        const res = await fetch(API_BASE + `/api/folders/${month}/${day}`);
         files = await res.json();
       } else {
-        const res = await fetch(`/api/folders/${month}`);
+        const res = await fetch(API_BASE + `/api/folders/${month}`);
         const data = await res.json();
         files = data.type === "photos" ? data.files : (Array.isArray(data) ? data : []);
       }
@@ -281,9 +328,10 @@ function renderSectionPhotos(grid, month, day, files) {
     cell.className = "photo-cell";
 
     const img = document.createElement("img");
+    const qs = thumbQueryString();
     const thumbPath = day
-      ? `/api/thumb/${month}/${day}/${files[i]}`
-      : `/api/thumb/${month}/${files[i]}`;
+      ? API_BASE + `/api/thumb/${month}/${day}/${files[i]}${qs}`
+      : API_BASE + `/api/thumb/${month}/${files[i]}${qs}`;
     img.dataset.src = thumbPath;
     img.alt = files[i];
     img.loading = "lazy";
@@ -321,11 +369,36 @@ function unloadSection(grid) {
 // ===========================================
 
 zoomSlider.addEventListener("input", () => {
-  const cols = parseInt(zoomSlider.value);
+  const cols = sliderToCols(parseInt(zoomSlider.value));
   document.documentElement.style.setProperty("--grid-cols", cols);
   localStorage.setItem("gridCols", cols);
+  updateExtremeZoomClass(cols);
   updateAllPlaceholderHeights();
+
+  // If thumbnail tier changed, re-render loaded sections
+  const newTier = JSON.stringify(getThumbParams());
+  if (newTier !== currentThumbTier) {
+    currentThumbTier = newTier;
+    reloadVisibleSections();
+  }
 });
+
+function updateExtremeZoomClass(cols) {
+  document.body.classList.toggle("extreme-zoom", cols > 50);
+}
+
+function reloadVisibleSections() {
+  for (const key of [...loadedSections]) {
+    const info = sectionElements.get(key);
+    if (!info) continue;
+    loadedSections.delete(key);
+    const count = parseInt(info.grid.dataset.count);
+    info.grid.innerHTML = "";
+    info.grid.classList.add("placeholder");
+    updatePlaceholderHeight(info.grid, count);
+  }
+  checkVisibleSections();
+}
 
 // Ctrl+scroll to zoom
 document.addEventListener("wheel", (e) => {
@@ -333,7 +406,8 @@ document.addEventListener("wheel", (e) => {
   if (!lightbox.classList.contains("hidden")) return;
   e.preventDefault();
   const current = parseInt(zoomSlider.value);
-  const next = e.deltaY > 0 ? Math.min(12, current + 1) : Math.max(2, current - 1);
+  const step = current < 70 ? 2 : 1; // finer steps in extreme range
+  const next = e.deltaY > 0 ? Math.min(100, current + step) : Math.max(0, current - step);
   if (next !== current) {
     zoomSlider.value = next;
     zoomSlider.dispatchEvent(new Event("input"));
@@ -447,13 +521,14 @@ function updateScrollIndicator() {
 // ===========================================
 
 function thumbUrl(filename) {
-  if (currentDay) return `/api/thumb/${currentMonth}/${currentDay}/${filename}`;
-  return `/api/thumb/${currentMonth}/${filename}`;
+  const qs = thumbQueryString();
+  if (currentDay) return API_BASE + `/api/thumb/${currentMonth}/${currentDay}/${filename}${qs}`;
+  return API_BASE + `/api/thumb/${currentMonth}/${filename}${qs}`;
 }
 
 function photoUrl(filename) {
-  if (currentDay) return `/api/photo/${currentMonth}/${currentDay}/${filename}`;
-  return `/api/photo/${currentMonth}/${filename}`;
+  if (currentDay) return API_BASE + `/api/photo/${currentMonth}/${currentDay}/${filename}`;
+  return API_BASE + `/api/photo/${currentMonth}/${filename}`;
 }
 
 // ===========================================
@@ -707,8 +782,8 @@ async function openMetaPanel() {
   metaContent.innerHTML = '<span class="meta-label">Loading...</span>';
   try {
     const url = currentDay
-      ? `/api/exif/${currentMonth}/${currentDay}/${filename}`
-      : `/api/exif/${currentMonth}/${filename}`;
+      ? API_BASE + `/api/exif/${currentMonth}/${currentDay}/${filename}`
+      : API_BASE + `/api/exif/${currentMonth}/${filename}`;
     const res = await fetch(url);
     const data = await res.json();
     metaCache.set(key, data);

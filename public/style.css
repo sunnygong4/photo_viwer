@@ -499,6 +499,13 @@ body {
   to { transform: rotate(360deg); }
 }
 
+/* --- Extreme zoom (>50 cols) --- */
+body.extreme-zoom .day-label { display: none; }
+body.extreme-zoom .month-header { padding: 2px 4px; font-size: 10px; min-height: auto; }
+body.extreme-zoom .year-header { padding: 4px 4px 2px; font-size: 14px; }
+body.extreme-zoom .day-grid { gap: 0; }
+body.extreme-zoom .photo-cell img { transition: none; }
+
 /* --- Responsive --- */
 @media (max-width: 600px) {
   #zoom-slider { width: 80px; }
