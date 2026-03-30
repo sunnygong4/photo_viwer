@@ -480,6 +480,7 @@ function closeLightbox() {
   lightbox.classList.add("hidden");
   lightboxImg.src = "";
   resetZoom();
+  closeMetaPanel();
   document.body.style.overflow = "";
 }
 
@@ -488,6 +489,7 @@ function loadLightboxImage(index) {
   lightboxSpinner.classList.remove("hidden");
   lightboxImg.style.opacity = "0";
   resetZoom();
+  closeMetaPanel();
 
   lightboxImg.onload = () => {
     lightboxSpinner.classList.add("hidden");
@@ -568,40 +570,82 @@ function updateFilmStripHighlight() {
 }
 
 // ===========================================
-// Zoom & Drag (Lightbox)
+// Zoom & Drag (Lightbox) — scroll to zoom
 // ===========================================
 
+let zoomLevel = 1;
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 8;
+
 function resetZoom() {
+  zoomLevel = 1;
   zoomed = false;
+  lightboxImg.style.transform = "";
+  lightboxImg.style.transformOrigin = "";
   lightboxImg.classList.remove("zoomed");
   imgContainer.scrollLeft = 0;
   imgContainer.scrollTop = 0;
   imgContainer.classList.remove("zoomed");
 }
 
-function toggleZoom(e) {
-  if (zoomed) {
+function applyZoom(clientX, clientY, newZoom) {
+  const oldZoom = zoomLevel;
+  newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newZoom));
+  if (newZoom === oldZoom) return;
+
+  const rect = imgContainer.getBoundingClientRect();
+  // Mouse position relative to the container
+  const mx = clientX - rect.left;
+  const my = clientY - rect.top;
+
+  // Current scroll + mouse = point in content space
+  const contentX = imgContainer.scrollLeft + mx;
+  const contentY = imgContainer.scrollTop + my;
+
+  // Where that point is in the image's natural coordinate space
+  const imgX = contentX / oldZoom;
+  const imgY = contentY / oldZoom;
+
+  zoomLevel = newZoom;
+
+  if (zoomLevel <= 1.05) {
     resetZoom();
-  } else {
-    zoomed = true;
-    lightboxImg.classList.add("zoomed");
-    imgContainer.classList.add("zoomed");
-    requestAnimationFrame(() => {
-      const rect = imgContainer.getBoundingClientRect();
-      const clickX = (e.clientX - rect.left) / rect.width;
-      const clickY = (e.clientY - rect.top) / rect.height;
-      imgContainer.scrollLeft = (imgContainer.scrollWidth - rect.width) * clickX;
-      imgContainer.scrollTop = (imgContainer.scrollHeight - rect.height) * clickY;
-    });
+    return;
   }
+
+  zoomed = true;
+  lightboxImg.classList.add("zoomed");
+  imgContainer.classList.add("zoomed");
+  lightboxImg.style.transform = `scale(${zoomLevel})`;
+  lightboxImg.style.transformOrigin = "0 0";
+
+  // Scroll so the same image point stays under the mouse
+  requestAnimationFrame(() => {
+    imgContainer.scrollLeft = imgX * newZoom - mx;
+    imgContainer.scrollTop = imgY * newZoom - my;
+  });
 }
 
+// Scroll wheel to zoom
+imgContainer.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  applyZoom(e.clientX, e.clientY, zoomLevel * factor);
+}, { passive: false });
+
+// Double-click to toggle between 1x and 3x
 imgContainer.addEventListener("dblclick", (e) => {
   e.preventDefault();
   e.stopPropagation();
-  toggleZoom(e);
+  if (zoomed) {
+    resetZoom();
+  } else {
+    applyZoom(e.clientX, e.clientY, 3);
+  }
 });
 
+// Drag to pan when zoomed
 imgContainer.addEventListener("mousedown", (e) => {
   if (!zoomed) return;
   e.preventDefault();
@@ -624,6 +668,101 @@ window.addEventListener("mouseup", () => {
   dragState.dragging = false;
   imgContainer.style.cursor = "";
 });
+
+// ===========================================
+// Metadata Panel
+// ===========================================
+
+const metaBtn = document.getElementById("lightbox-meta");
+const metaPanel = document.getElementById("meta-panel");
+const metaContent = document.getElementById("meta-content");
+let metaCache = new Map();
+
+metaBtn.onclick = (e) => {
+  e.stopPropagation();
+  const isOpen = !metaPanel.classList.contains("hidden");
+  if (isOpen) {
+    closeMetaPanel();
+  } else {
+    openMetaPanel();
+  }
+};
+
+function closeMetaPanel() {
+  metaPanel.classList.add("hidden");
+  metaBtn.classList.remove("active");
+}
+
+async function openMetaPanel() {
+  metaPanel.classList.remove("hidden");
+  metaBtn.classList.add("active");
+  const filename = currentFiles[lightboxIndex];
+  const key = `${currentMonth}/${currentDay ? currentDay + "/" : ""}${filename}`;
+
+  if (metaCache.has(key)) {
+    renderMeta(metaCache.get(key), filename);
+    return;
+  }
+
+  metaContent.innerHTML = '<span class="meta-label">Loading...</span>';
+  try {
+    const url = currentDay
+      ? `/api/exif/${currentMonth}/${currentDay}/${filename}`
+      : `/api/exif/${currentMonth}/${filename}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    metaCache.set(key, data);
+    renderMeta(data, filename);
+  } catch {
+    metaContent.innerHTML = '<span class="meta-label">Failed to load metadata</span>';
+  }
+}
+
+function renderMeta(data, filename) {
+  const rows = [];
+
+  function row(label, value) {
+    if (value !== undefined && value !== null && value !== "")
+      rows.push(`<span class="meta-label">${label}</span><span class="meta-value">${value}</span>`);
+  }
+  function divider() {
+    rows.push('<div class="meta-divider"></div>');
+  }
+
+  row("Filename", filename);
+  row("Dimensions", data.width && data.height ? `${data.width} × ${data.height}` : null);
+  row("Format", data.format?.toUpperCase());
+
+  if (data.make || data.model || data.lensModel) {
+    divider();
+    row("Camera", [data.make, data.model].filter(Boolean).join(" "));
+    row("Lens", data.lensModel || data.lensMake);
+  }
+
+  if (data.focalLength || data.fNumber || data.exposureTime || data.iso) {
+    divider();
+    row("Focal Length", data.focalLength);
+    if (data.focalLengthIn35mm) row("35mm Equiv.", data.focalLengthIn35mm);
+    row("Aperture", data.fNumber);
+    row("Shutter", data.exposureTime ? `${data.exposureTime}s` : null);
+    row("ISO", data.iso);
+  }
+
+  if (data.exposureProgram || data.meteringMode || data.flash || data.exposureBias) {
+    divider();
+    row("Mode", data.exposureProgram);
+    row("Metering", data.meteringMode);
+    row("Flash", data.flash);
+    row("Exp. Comp.", data.exposureBias);
+  }
+
+  if (data.dateTimeOriginal) {
+    divider();
+    row("Date Taken", data.dateTimeOriginal);
+  }
+
+  metaContent.innerHTML = rows.join("\n");
+}
 
 // ===========================================
 // Lightbox Event Listeners

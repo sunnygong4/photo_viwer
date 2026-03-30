@@ -49,19 +49,6 @@ function isJpeg(filename: string): boolean {
 
 const app = express();
 
-// Basic auth middleware
-app.use((req, res, next) => {
-  const auth = req.headers.authorization;
-  if (!auth || !auth.startsWith("Basic ")) {
-    res.setHeader("WWW-Authenticate", 'Basic realm="Photos"');
-    return res.status(401).send("Authentication required");
-  }
-  const [user, pass] = Buffer.from(auth.slice(6), "base64").toString().split(":");
-  if (user === "guest" && pass === "abc123") return next();
-  res.setHeader("WWW-Authenticate", 'Basic realm="Photos"');
-  res.status(401).send("Invalid credentials");
-});
-
 // --- /api/tree endpoint with caching ---
 const MONTH_PATTERN = /^\d{4}\.\d{2}\.x$/;
 const MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June",
@@ -367,6 +354,169 @@ app.get("/api/photo/:month/:day/:filename", async (req, res) => {
     res.status(404).json({ error: "File not found" });
   }
 });
+
+// GET /api/exif/:month/:filename - EXIF metadata for photos in month folder
+app.get("/api/exif/:month/:filename", async (req, res) => {
+  const { month, filename } = req.params;
+  if (!safePath(month) || !safePath(filename))
+    return res.status(400).json({ error: "Invalid path" });
+  const filePath = path.join(PHOTOS_ROOT, month, filename);
+  try {
+    const meta = await sharp(filePath).metadata();
+    res.json(formatExif(meta));
+  } catch {
+    res.status(404).json({ error: "Could not read metadata" });
+  }
+});
+
+// GET /api/exif/:month/:day/:filename - EXIF metadata for photos in day folder
+app.get("/api/exif/:month/:day/:filename", async (req, res) => {
+  const { month, day, filename } = req.params;
+  if (!safePath(month) || !safePath(day) || !safePath(filename))
+    return res.status(400).json({ error: "Invalid path" });
+  const filePath = path.join(PHOTOS_ROOT, month, day, filename);
+  try {
+    const meta = await sharp(filePath).metadata();
+    res.json(formatExif(meta));
+  } catch {
+    res.status(404).json({ error: "Could not read metadata" });
+  }
+});
+
+function formatExif(meta: any) {
+  const exif = meta.exif ? parseExifBuffer(meta.exif) : {};
+  return {
+    width: meta.width,
+    height: meta.height,
+    format: meta.format,
+    space: meta.space,
+    density: meta.density,
+    ...exif,
+  };
+}
+
+function parseExifBuffer(buf: Buffer) {
+  // Sharp gives raw EXIF buffer; use a lightweight parser
+  // We'll extract common tags from the IFD0 and EXIF sub-IFD
+  try {
+    const result: Record<string, any> = {};
+    // Check for EXIF header
+    if (buf.length < 10) return result;
+
+    let offset = 0;
+    // Skip "Exif\0\0" header if present
+    if (buf[0] === 0x45 && buf[1] === 0x78) offset = 6;
+
+    const tiffStart = offset;
+    const isLE = buf.readUInt16BE(offset) === 0x4949;
+    const read16 = isLE ? (o: number) => buf.readUInt16LE(o) : (o: number) => buf.readUInt16BE(o);
+    const read32 = isLE ? (o: number) => buf.readUInt32LE(o) : (o: number) => buf.readUInt32BE(o);
+    const readS32 = isLE ? (o: number) => buf.readInt32LE(o) : (o: number) => buf.readInt32BE(o);
+
+    function readRational(o: number) {
+      const num = read32(o);
+      const den = read32(o + 4);
+      return den ? num / den : 0;
+    }
+    function readSRational(o: number) {
+      const num = readS32(o);
+      const den = readS32(o + 4);
+      return den ? num / den : 0;
+    }
+    function readString(o: number, len: number) {
+      return buf.subarray(o, o + len).toString("ascii").replace(/\0+$/, "").trim();
+    }
+
+    function readValue(tag: number, type: number, count: number, valueOffset: number) {
+      const totalBytes = [0, 1, 1, 2, 4, 8, 1, 1, 2, 4, 8, 4, 8][type] * count;
+      const dataOff = totalBytes <= 4 ? valueOffset : tiffStart + read32(valueOffset);
+      if (dataOff + totalBytes > buf.length) return null;
+
+      if (type === 2) return readString(dataOff, count); // ASCII
+      if (type === 5) return readRational(dataOff); // RATIONAL
+      if (type === 10) return readSRational(dataOff); // SRATIONAL
+      if (type === 3 && count === 1) return read16(dataOff); // SHORT
+      if (type === 4 && count === 1) return read32(dataOff); // LONG
+      return null;
+    }
+
+    const TAGS: Record<number, string> = {
+      0x010f: "make", 0x0110: "model",
+      0x8769: "_exifIFD", 0xa005: "_interopIFD",
+      0x829a: "exposureTime", 0x829d: "fNumber",
+      0x8827: "iso", 0x9003: "dateTimeOriginal",
+      0x920a: "focalLength", 0xa405: "focalLengthIn35mm",
+      0xa434: "lensModel", 0xa433: "lensMake",
+      0x0112: "orientation", 0xa002: "pixelXDimension", 0xa003: "pixelYDimension",
+      0x9204: "exposureBias", 0x9207: "meteringMode",
+      0x8822: "exposureProgram", 0xa406: "sceneCaptureType",
+      0x9209: "flash",
+    };
+
+    const METERING: Record<number, string> = {
+      0: "Unknown", 1: "Average", 2: "Center-weighted", 3: "Spot",
+      4: "Multi-spot", 5: "Multi-segment", 6: "Partial",
+    };
+    const EXPOSURE_PROG: Record<number, string> = {
+      0: "Unknown", 1: "Manual", 2: "Program AE", 3: "Aperture Priority",
+      4: "Shutter Priority", 5: "Creative", 6: "Action", 7: "Portrait",
+    };
+
+    function parseIFD(ifdOffset: number) {
+      if (ifdOffset + 2 > buf.length) return;
+      const entries = read16(ifdOffset);
+      for (let i = 0; i < entries; i++) {
+        const entryOff = ifdOffset + 2 + i * 12;
+        if (entryOff + 12 > buf.length) break;
+        const tag = read16(entryOff);
+        const type = read16(entryOff + 2);
+        const count = read32(entryOff + 4);
+        const valueOff = entryOff + 8;
+
+        const name = TAGS[tag];
+        if (!name) continue;
+
+        if (name === "_exifIFD") {
+          const subOffset = tiffStart + read32(valueOff);
+          parseIFD(subOffset);
+          continue;
+        }
+        if (name === "_interopIFD") continue;
+
+        const val = readValue(tag, type, count, valueOff);
+        if (val === null || val === undefined) continue;
+
+        if (name === "exposureTime") {
+          result[name] = val < 1 ? `1/${Math.round(1 / val)}` : `${val}`;
+          result.exposureTimeValue = val;
+        } else if (name === "fNumber") {
+          result[name] = `f/${val.toFixed(1)}`;
+        } else if (name === "focalLength") {
+          result[name] = `${val.toFixed(1)}mm`;
+        } else if (name === "focalLengthIn35mm") {
+          result[name] = `${val}mm`;
+        } else if (name === "exposureBias") {
+          result[name] = `${val >= 0 ? "+" : ""}${val.toFixed(1)} EV`;
+        } else if (name === "meteringMode") {
+          result[name] = METERING[val as number] || `${val}`;
+        } else if (name === "exposureProgram") {
+          result[name] = EXPOSURE_PROG[val as number] || `${val}`;
+        } else if (name === "flash") {
+          result[name] = (val as number) & 1 ? "Fired" : "No flash";
+        } else {
+          result[name] = val;
+        }
+      }
+    }
+
+    // Parse IFD0
+    const ifd0Offset = tiffStart + read32(tiffStart + 4);
+    parseIFD(ifd0Offset);
+    return result;
+  } catch {
+    return {};
+  }
+}
 
 // Serve static frontend (after API routes to avoid intercepting .JPG URLs)
 app.use(express.static(path.join(__dirname, "public")));
