@@ -518,6 +518,11 @@ function parseExifBuffer(buf: Buffer) {
   }
 }
 
+// Legacy folder browser
+app.get("/legacy", (_req, res) => {
+  res.sendFile(path.join(__dirname, "public", "legacy.html"));
+});
+
 // Serve static frontend (after API routes to avoid intercepting .JPG URLs)
 app.use(express.static(path.join(__dirname, "public")));
 
