@@ -49,6 +49,104 @@ function isJpeg(filename: string): boolean {
 
 const app = express();
 
+// Basic auth middleware
+app.use((req, res, next) => {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith("Basic ")) {
+    res.setHeader("WWW-Authenticate", 'Basic realm="Photos"');
+    return res.status(401).send("Authentication required");
+  }
+  const [user, pass] = Buffer.from(auth.slice(6), "base64").toString().split(":");
+  if (user === "guest" && pass === "abc123") return next();
+  res.setHeader("WWW-Authenticate", 'Basic realm="Photos"');
+  res.status(401).send("Invalid credentials");
+});
+
+// --- /api/tree endpoint with caching ---
+const MONTH_PATTERN = /^\d{4}\.\d{2}\.x$/;
+const MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"];
+
+let treeCache: { data: any; timestamp: number } | null = null;
+const TREE_TTL = 3600_000; // 1 hour (NAS scan takes ~4 min, cache aggressively)
+
+app.get("/api/tree", async (req, res) => {
+  if (req.query.refresh) treeCache = null;
+  if (treeCache && Date.now() - treeCache.timestamp < TREE_TTL) {
+    return res.json(treeCache.data);
+  }
+
+  try {
+    const topEntries = await fs.readdir(PHOTOS_ROOT, { withFileTypes: true });
+    const topDirs = topEntries.filter((e) => e.isDirectory()).map((e) => e.name).sort().reverse();
+
+    const timeline: any[] = [];
+    const collections: any[] = [];
+    let totalPhotos = 0;
+
+    for (const dir of topDirs) {
+      const isDateFolder = MONTH_PATTERN.test(dir);
+      const fullPath = path.join(PHOTOS_ROOT, dir);
+      const entries = await fs.readdir(fullPath, { withFileTypes: true });
+      const subDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name).sort().reverse();
+      const directJpegs = entries.filter((e) => e.isFile() && isJpeg(e.name));
+
+      if (isDateFolder) {
+        const year = parseInt(dir.slice(0, 4));
+        const monthNum = parseInt(dir.slice(5, 7));
+        const days: any[] = [];
+
+        if (subDirs.length > 0) {
+          // Has day subfolders
+          for (const sub of subDirs) {
+            const dayFiles = await fs.readdir(path.join(fullPath, sub));
+            const count = dayFiles.filter(isJpeg).length;
+            if (count > 0) {
+              days.push({ day: sub, count });
+              totalPhotos += count;
+            }
+          }
+        } else if (directJpegs.length > 0) {
+          // Flat folder with photos directly
+          days.push({ day: null, count: directJpegs.length });
+          totalPhotos += directJpegs.length;
+        }
+
+        if (days.length > 0) {
+          timeline.push({ month: dir, year, monthNum, monthName: MONTH_NAMES[monthNum], days });
+        }
+      } else {
+        // Collection folder (e.g., Film.x)
+        const groups: any[] = [];
+        if (subDirs.length > 0) {
+          for (const sub of subDirs) {
+            const subFiles = await fs.readdir(path.join(fullPath, sub));
+            const count = subFiles.filter(isJpeg).length;
+            if (count > 0) {
+              groups.push({ subfolder: sub, count });
+              totalPhotos += count;
+            }
+          }
+        }
+        if (directJpegs.length > 0) {
+          groups.push({ subfolder: null, count: directJpegs.length });
+          totalPhotos += directJpegs.length;
+        }
+        if (groups.length > 0) {
+          collections.push({ name: dir, groups });
+        }
+      }
+    }
+
+    const result = { timeline, collections, totalPhotos };
+    treeCache = { data: result, timestamp: Date.now() };
+    res.json(result);
+  } catch (err) {
+    console.error("Tree scan error:", err);
+    res.status(500).json({ error: "Failed to scan photo tree" });
+  }
+});
+
 // GET /api/folders - list top-level folders (months + Film.x)
 app.get("/api/folders", async (_req, res) => {
   try {
@@ -277,4 +375,12 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`Photo browser running at http://localhost:${PORT}`);
   console.log(`Serving photos from: ${PHOTOS_ROOT}`);
   console.log(`Thumbnail cache: ${CACHE_DIR}`);
+
+  // Pre-warm the tree cache in the background
+  console.log("Pre-scanning photo tree in background...");
+  fetch(`http://localhost:${PORT}/api/tree`).then(() => {
+    console.log("Tree cache warmed successfully.");
+  }).catch(() => {
+    console.log("Background tree scan failed (will retry on first request).");
+  });
 });

@@ -1,56 +1,450 @@
+// ===========================================
 // State
+// ===========================================
 let currentFiles = [];
 let lightboxIndex = -1;
+let currentMonth = "";
+let currentDay = "";
+let zoomed = false;
+let dragState = { dragging: false, startX: 0, startY: 0, scrollX: 0, scrollY: 0 };
+
+// Gallery state
+let treeData = null;
+const fileCache = new Map(); // "month/day" -> string[]
+const loadedSections = new Set(); // section keys currently with images in DOM
+const sectionElements = new Map(); // section key -> { grid, month, day }
 
 // DOM refs
-const content = document.getElementById("content");
-const breadcrumb = document.getElementById("breadcrumb");
+const gallery = document.getElementById("gallery");
 const lightbox = document.getElementById("lightbox");
 const lightboxImg = document.getElementById("lightbox-img");
 const lightboxInfo = document.getElementById("lightbox-info");
 const lightboxSpinner = document.getElementById("lightbox-spinner");
 const filmStrip = document.getElementById("film-strip");
+const zoomSlider = document.getElementById("zoom-slider");
+const photoCount = document.getElementById("photo-count");
+const scrollIndicator = document.getElementById("scroll-indicator");
+const timelineNav = document.getElementById("timeline-nav");
+const timelineContent = document.getElementById("timeline-content");
+const timelineBackdrop = document.getElementById("timeline-backdrop");
+const imgContainer = document.getElementById("lightbox-img-container");
 
-// Current route context for lightbox full-size URLs
-let currentMonth = "";
-let currentDay = "";
+// ===========================================
+// Initialization
+// ===========================================
 
-// Zoom/drag state
-let zoomed = false;
-let dragState = { dragging: false, startX: 0, startY: 0, scrollX: 0, scrollY: 0 };
+async function init() {
+  gallery.innerHTML = '<div class="loading-msg">Loading photo library...</div>';
 
-// --- Routing ---
+  // Restore zoom
+  const savedZoom = localStorage.getItem("gridCols");
+  if (savedZoom) {
+    const cols = parseInt(savedZoom);
+    zoomSlider.value = cols;
+    document.documentElement.style.setProperty("--grid-cols", cols);
+  }
 
-function navigate() {
-  const hash = location.hash.slice(1) || "/";
-  const parts = hash.split("/").filter(Boolean);
-
-  if (parts.length === 0) {
-    loadRoot();
-  } else if (parts.length === 1) {
-    loadMonth(parts[0]);
-  } else if (parts.length === 2) {
-    loadDay(parts[0], parts[1]);
+  try {
+    const res = await fetch("/api/tree");
+    treeData = await res.json();
+    photoCount.textContent = `Photos (${treeData.totalPhotos.toLocaleString()})`;
+    buildGallery(treeData);
+    buildTimelineNav(treeData);
+    setupObservers();
+    setupScrollIndicator();
+  } catch (err) {
+    gallery.innerHTML = '<div class="loading-msg">Failed to load photo library. Is the server running?</div>';
+    console.error(err);
   }
 }
 
-window.addEventListener("hashchange", navigate);
-window.addEventListener("load", navigate);
+// ===========================================
+// Gallery Builder
+// ===========================================
 
-// --- Breadcrumb ---
+function buildGallery(tree) {
+  gallery.innerHTML = "";
+  let lastYear = null;
 
-function setBreadcrumb(parts) {
-  let html = '<a href="#/">Photos</a>';
-  let hashPath = "#";
-  for (const p of parts) {
-    hashPath += "/" + p;
-    html += '<span class="sep">/</span>';
-    html += `<a href="${hashPath}">${p}</a>`;
+  // Timeline sections
+  for (const monthGroup of tree.timeline) {
+    // Year header
+    if (monthGroup.year !== lastYear) {
+      lastYear = monthGroup.year;
+      const yearEl = document.createElement("div");
+      yearEl.className = "year-header";
+      yearEl.id = `year-${monthGroup.year}`;
+      yearEl.textContent = monthGroup.year;
+      gallery.appendChild(yearEl);
+    }
+
+    // Month header
+    const monthEl = document.createElement("div");
+    monthEl.className = "month-header";
+    monthEl.id = `month-${monthGroup.month}`;
+    const monthTotal = monthGroup.days.reduce((s, d) => s + d.count, 0);
+    monthEl.textContent = `${monthGroup.monthName} · ${monthTotal.toLocaleString()}`;
+    gallery.appendChild(monthEl);
+
+    // Days
+    for (const dayGroup of monthGroup.days) {
+      // Day label
+      if (dayGroup.day) {
+        const dayLabel = document.createElement("div");
+        dayLabel.className = "day-label";
+        const parts = dayGroup.day.split(".");
+        dayLabel.textContent = `${monthGroup.monthName} ${parseInt(parts[2])} · ${dayGroup.count}`;
+        gallery.appendChild(dayLabel);
+      }
+
+      // Day grid (placeholder)
+      const grid = document.createElement("div");
+      grid.className = "day-grid placeholder";
+      const sectionKey = dayGroup.day ? `${monthGroup.month}/${dayGroup.day}` : monthGroup.month;
+      grid.dataset.month = monthGroup.month;
+      grid.dataset.day = dayGroup.day || "";
+      grid.dataset.count = dayGroup.count;
+      grid.dataset.key = sectionKey;
+      updatePlaceholderHeight(grid, dayGroup.count);
+      gallery.appendChild(grid);
+
+      sectionElements.set(sectionKey, {
+        grid,
+        month: monthGroup.month,
+        day: dayGroup.day || ""
+      });
+    }
   }
-  breadcrumb.innerHTML = html;
+
+  // Collections
+  for (const col of tree.collections) {
+    const colHeader = document.createElement("div");
+    colHeader.className = "collections-header";
+    colHeader.id = `col-${col.name}`;
+    colHeader.textContent = col.name.replace(".x", "");
+    gallery.appendChild(colHeader);
+
+    for (const group of col.groups) {
+      if (group.subfolder) {
+        const label = document.createElement("div");
+        label.className = "day-label";
+        label.textContent = `${group.subfolder} · ${group.count}`;
+        gallery.appendChild(label);
+      }
+
+      const grid = document.createElement("div");
+      grid.className = "day-grid placeholder";
+      const sectionKey = group.subfolder
+        ? `${col.name}/${group.subfolder}`
+        : col.name;
+      grid.dataset.month = col.name;
+      grid.dataset.day = group.subfolder || "";
+      grid.dataset.count = group.count;
+      grid.dataset.key = sectionKey;
+      updatePlaceholderHeight(grid, group.count);
+      gallery.appendChild(grid);
+
+      sectionElements.set(sectionKey, {
+        grid,
+        month: col.name,
+        day: group.subfolder || ""
+      });
+    }
+  }
 }
 
-// --- Helper: build thumb/photo URL ---
+function getGridCols() {
+  return parseInt(zoomSlider.value) || 5;
+}
+
+function getCellSize() {
+  const cols = getGridCols();
+  const gap = 2;
+  const w = window.innerWidth || 1280;
+  return (w - gap * (cols - 1)) / cols;
+}
+
+function updatePlaceholderHeight(grid, count) {
+  const cols = getGridCols();
+  const cellSize = getCellSize();
+  const rows = Math.ceil(count / cols);
+  grid.style.minHeight = `${rows * (cellSize + 2)}px`;
+}
+
+function updateAllPlaceholderHeights() {
+  for (const [key, info] of sectionElements) {
+    if (!loadedSections.has(key)) {
+      updatePlaceholderHeight(info.grid, parseInt(info.grid.dataset.count));
+    }
+  }
+}
+
+// ===========================================
+// Lazy Loading (Two-Tier)
+// ===========================================
+
+let lastScrollCheck = 0;
+
+function setupObservers() {
+  const onScroll = () => {
+    const now = Date.now();
+    if (now - lastScrollCheck < 100) return; // throttle to 10fps
+    lastScrollCheck = now;
+    checkVisibleSections();
+    checkVisibleThumbs();
+  };
+
+  window.addEventListener("scroll", onScroll, { passive: true });
+  window.addEventListener("resize", onScroll, { passive: true });
+
+  // Initial check after layout settles
+  setTimeout(onScroll, 100);
+}
+
+function checkVisibleSections() {
+  const viewH = window.innerHeight;
+  const grids = gallery.querySelectorAll(".day-grid");
+
+  for (const grid of grids) {
+    const rect = grid.getBoundingClientRect();
+    // Load sections within 3000px of viewport
+    if (rect.bottom > -3000 && rect.top < viewH + 3000) {
+      if (!loadedSections.has(grid.dataset.key)) {
+        loadSection(grid);
+      }
+    }
+    // Unload sections far from viewport (>8000px away)
+    if (loadedSections.has(grid.dataset.key)) {
+      if (rect.bottom < -8000 || rect.top > viewH + 8000) {
+        unloadSection(grid);
+      }
+    }
+  }
+}
+
+function checkVisibleThumbs() {
+  const viewH = window.innerHeight;
+  // Only check loaded (non-placeholder) grids for thumbnail visibility
+  for (const grid of gallery.querySelectorAll(".day-grid:not(.placeholder)")) {
+    const gridRect = grid.getBoundingClientRect();
+    // Skip grids far from viewport
+    if (gridRect.bottom < -1500 || gridRect.top > viewH + 1500) continue;
+
+    for (const img of grid.querySelectorAll("img[data-src]")) {
+      const rect = img.getBoundingClientRect();
+      if (rect.top < viewH + 1000 && rect.bottom > -1000) {
+        img.src = img.dataset.src;
+        delete img.dataset.src;
+      } else if (rect.top > viewH + 1000) {
+        break;
+      }
+    }
+  }
+}
+
+async function loadSection(grid) {
+  const key = grid.dataset.key;
+  if (loadedSections.has(key)) return;
+  loadedSections.add(key);
+
+  const month = grid.dataset.month;
+  const day = grid.dataset.day;
+
+  let files = fileCache.get(key);
+  if (!files) {
+    try {
+      if (day) {
+        const res = await fetch(`/api/folders/${month}/${day}`);
+        files = await res.json();
+      } else {
+        const res = await fetch(`/api/folders/${month}`);
+        const data = await res.json();
+        files = data.type === "photos" ? data.files : (Array.isArray(data) ? data : []);
+      }
+      fileCache.set(key, files);
+    } catch {
+      loadedSections.delete(key);
+      return;
+    }
+  }
+
+  renderSectionPhotos(grid, month, day, files);
+}
+
+function renderSectionPhotos(grid, month, day, files) {
+  grid.innerHTML = "";
+  grid.classList.remove("placeholder");
+  grid.style.minHeight = "";
+
+  for (let i = 0; i < files.length; i++) {
+    const cell = document.createElement("div");
+    cell.className = "photo-cell";
+
+    const img = document.createElement("img");
+    const thumbPath = day
+      ? `/api/thumb/${month}/${day}/${files[i]}`
+      : `/api/thumb/${month}/${files[i]}`;
+    img.dataset.src = thumbPath;
+    img.alt = files[i];
+    img.loading = "lazy";
+    img.onload = () => img.classList.add("loaded");
+
+    const idx = i;
+    cell.onclick = () => openLightboxFromGrid(month, day, files, idx);
+
+    cell.appendChild(img);
+    grid.appendChild(cell);
+  }
+
+  // Trigger a thumb visibility check for the newly rendered section
+  checkVisibleThumbs();
+}
+
+function unloadSection(grid) {
+  const key = grid.dataset.key;
+  if (!loadedSections.has(key)) return;
+
+  // Only unload if far from viewport
+  const rect = grid.getBoundingClientRect();
+  const viewH = window.innerHeight;
+  if (rect.bottom > -5000 && rect.top < viewH + 5000) return;
+
+  loadedSections.delete(key);
+  const count = parseInt(grid.dataset.count);
+  grid.innerHTML = "";
+  grid.classList.add("placeholder");
+  updatePlaceholderHeight(grid, count);
+}
+
+// ===========================================
+// Zoom Control
+// ===========================================
+
+zoomSlider.addEventListener("input", () => {
+  const cols = parseInt(zoomSlider.value);
+  document.documentElement.style.setProperty("--grid-cols", cols);
+  localStorage.setItem("gridCols", cols);
+  updateAllPlaceholderHeights();
+});
+
+// Ctrl+scroll to zoom
+document.addEventListener("wheel", (e) => {
+  if (!e.ctrlKey) return;
+  if (!lightbox.classList.contains("hidden")) return;
+  e.preventDefault();
+  const current = parseInt(zoomSlider.value);
+  const next = e.deltaY > 0 ? Math.min(12, current + 1) : Math.max(2, current - 1);
+  if (next !== current) {
+    zoomSlider.value = next;
+    zoomSlider.dispatchEvent(new Event("input"));
+  }
+}, { passive: false });
+
+// ===========================================
+// Timeline Navigator
+// ===========================================
+
+function buildTimelineNav(tree) {
+  timelineContent.innerHTML = "";
+  let lastYear = null;
+
+  for (const mg of tree.timeline) {
+    if (mg.year !== lastYear) {
+      lastYear = mg.year;
+      const yearEl = document.createElement("div");
+      yearEl.className = "nav-year";
+      yearEl.textContent = mg.year;
+      yearEl.onclick = () => {
+        document.getElementById(`year-${mg.year}`)?.scrollIntoView({ behavior: "smooth" });
+        closeTimeline();
+      };
+      timelineContent.appendChild(yearEl);
+    }
+
+    const monthEl = document.createElement("div");
+    monthEl.className = "nav-month";
+    const total = mg.days.reduce((s, d) => s + d.count, 0);
+    monthEl.innerHTML = `<span>${mg.monthName}</span><span class="count">${total.toLocaleString()}</span>`;
+    monthEl.onclick = () => {
+      document.getElementById(`month-${mg.month}`)?.scrollIntoView({ behavior: "smooth" });
+      closeTimeline();
+    };
+    timelineContent.appendChild(monthEl);
+  }
+
+  // Collections
+  for (const col of tree.collections) {
+    const colEl = document.createElement("div");
+    colEl.className = "nav-year";
+    colEl.textContent = col.name.replace(".x", "");
+    colEl.onclick = () => {
+      document.getElementById(`col-${col.name}`)?.scrollIntoView({ behavior: "smooth" });
+      closeTimeline();
+    };
+    timelineContent.appendChild(colEl);
+  }
+}
+
+document.getElementById("nav-toggle").onclick = () => {
+  const isOpen = timelineNav.classList.contains("open");
+  if (isOpen) closeTimeline();
+  else openTimeline();
+};
+
+timelineBackdrop.onclick = closeTimeline;
+
+function openTimeline() {
+  timelineNav.classList.remove("hidden");
+  timelineNav.classList.add("open");
+  timelineBackdrop.classList.remove("hidden");
+  timelineBackdrop.classList.add("open");
+}
+
+function closeTimeline() {
+  timelineNav.classList.remove("open");
+  timelineBackdrop.classList.remove("open");
+}
+
+// ===========================================
+// Scroll Indicator
+// ===========================================
+
+let scrollTimeout;
+
+function setupScrollIndicator() {
+  window.addEventListener("scroll", () => {
+    updateScrollIndicator();
+    scrollIndicator.classList.add("visible");
+    clearTimeout(scrollTimeout);
+    scrollTimeout = setTimeout(() => {
+      scrollIndicator.classList.remove("visible");
+    }, 1500);
+  }, { passive: true });
+}
+
+function updateScrollIndicator() {
+  // Find the topmost visible year/month header
+  const headers = gallery.querySelectorAll(".year-header, .month-header");
+  let current = "";
+  const toolbarBottom = 48 + 10;
+
+  for (const h of headers) {
+    const rect = h.getBoundingClientRect();
+    if (rect.top <= toolbarBottom + 50) {
+      current = h.textContent;
+    } else {
+      break;
+    }
+  }
+
+  if (current) {
+    scrollIndicator.textContent = current;
+  }
+}
+
+// ===========================================
+// URL helpers
+// ===========================================
 
 function thumbUrl(filename) {
   if (currentDay) return `/api/thumb/${currentMonth}/${currentDay}/${filename}`;
@@ -62,130 +456,16 @@ function photoUrl(filename) {
   return `/api/photo/${currentMonth}/${filename}`;
 }
 
-// --- Views ---
+// ===========================================
+// Lightbox
+// ===========================================
 
-async function loadRoot() {
-  setBreadcrumb([]);
-  content.innerHTML = '<div class="loading-msg">Loading folders...</div>';
-
-  const folders = await fetch("/api/folders").then((r) => r.json());
-
-  const grid = document.createElement("div");
-  grid.className = "folder-grid";
-
-  for (const name of folders) {
-    const card = document.createElement("div");
-    card.className = "folder-card";
-    card.innerHTML = `
-      <div class="folder-icon">📁</div>
-      <div class="folder-name">${name}</div>
-    `;
-    card.onclick = () => (location.hash = `/${name}`);
-    grid.appendChild(card);
-  }
-
-  content.innerHTML = "";
-  content.appendChild(grid);
-}
-
-async function loadMonth(month) {
-  setBreadcrumb([month]);
-  content.innerHTML = '<div class="loading-msg">Loading...</div>';
-
-  const data = await fetch(`/api/folders/${month}`).then((r) => r.json());
-
-  // If this folder has photos directly (no subfolders)
-  if (data.type === "photos") {
-    currentMonth = month;
-    currentDay = "";
-    currentFiles = data.files;
-    renderMasonry(data.files);
-    return;
-  }
-
-  // Otherwise show subfolders
-  const grid = document.createElement("div");
-  grid.className = "folder-grid";
-
-  for (const item of data.items) {
-    const card = document.createElement("div");
-    card.className = "folder-card";
-    card.innerHTML = `
-      <div class="folder-icon">📁</div>
-      <div class="folder-name">${item.name}</div>
-      <div class="folder-count">${item.count} photos</div>
-    `;
-    card.onclick = () => (location.hash = `/${month}/${item.name}`);
-    grid.appendChild(card);
-  }
-
-  content.innerHTML = "";
-  content.appendChild(grid);
-}
-
-async function loadDay(month, day) {
-  setBreadcrumb([month, day]);
+function openLightboxFromGrid(month, day, files, index) {
   currentMonth = month;
-  currentDay = day;
-  content.innerHTML = '<div class="loading-msg">Loading photos...</div>';
-
-  const files = await fetch(`/api/folders/${month}/${day}`).then((r) =>
-    r.json()
-  );
+  currentDay = day || "";
   currentFiles = files;
-  renderMasonry(files);
+  openLightbox(index);
 }
-
-function renderMasonry(files) {
-  if (files.length === 0) {
-    content.innerHTML =
-      '<div class="loading-msg">No JPEG files in this folder.</div>';
-    return;
-  }
-
-  const masonry = document.createElement("div");
-  masonry.className = "masonry";
-
-  const observer = new IntersectionObserver(
-    (entries) => {
-      for (const entry of entries) {
-        if (entry.isIntersecting) {
-          const img = entry.target;
-          img.src = img.dataset.src;
-          observer.unobserve(img);
-        }
-      }
-    },
-    { rootMargin: "500px" }
-  );
-
-  for (let i = 0; i < files.length; i++) {
-    const filename = files[i];
-    const item = document.createElement("div");
-    item.className = "masonry-item";
-
-    const img = document.createElement("img");
-    img.dataset.src = thumbUrl(filename);
-    img.alt = filename;
-    img.loading = "lazy";
-    img.onload = () => {
-      img.classList.add("loaded");
-      item.style.minHeight = "";
-    };
-
-    const idx = i;
-    item.onclick = () => openLightbox(idx);
-    item.appendChild(img);
-    masonry.appendChild(item);
-
-    observer.observe(img);
-  }
-
-  content.innerHTML = "";
-  content.appendChild(masonry);
-}
-
-// --- Lightbox ---
 
 function openLightbox(index) {
   lightboxIndex = index;
@@ -233,7 +513,9 @@ function lightboxNext() {
   }
 }
 
-// --- Film Strip ---
+// ===========================================
+// Film Strip
+// ===========================================
 
 function buildFilmStrip() {
   filmStrip.innerHTML = "";
@@ -279,17 +561,15 @@ function updateFilmStripHighlight() {
   thumbs.forEach((t, i) => {
     t.classList.toggle("active", i === lightboxIndex);
   });
-
-  // Scroll active thumb into view
   const active = filmStrip.querySelector(".film-thumb.active");
   if (active) {
     active.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
   }
 }
 
-// --- Zoom & Drag ---
-
-const imgContainer = document.getElementById("lightbox-img-container");
+// ===========================================
+// Zoom & Drag (Lightbox)
+// ===========================================
 
 function resetZoom() {
   zoomed = false;
@@ -306,8 +586,6 @@ function toggleZoom(e) {
     zoomed = true;
     lightboxImg.classList.add("zoomed");
     imgContainer.classList.add("zoomed");
-
-    // Center scroll on the double-click point
     requestAnimationFrame(() => {
       const rect = imgContainer.getBoundingClientRect();
       const clickX = (e.clientX - rect.left) / rect.width;
@@ -324,7 +602,6 @@ imgContainer.addEventListener("dblclick", (e) => {
   toggleZoom(e);
 });
 
-// Drag to pan when zoomed
 imgContainer.addEventListener("mousedown", (e) => {
   if (!zoomed) return;
   e.preventDefault();
@@ -348,7 +625,9 @@ window.addEventListener("mouseup", () => {
   imgContainer.style.cursor = "";
 });
 
-// --- Lightbox event listeners ---
+// ===========================================
+// Lightbox Event Listeners
+// ===========================================
 
 document.getElementById("lightbox-backdrop").onclick = closeLightbox;
 document.getElementById("lightbox-close").onclick = closeLightbox;
@@ -363,14 +642,10 @@ document.getElementById("lightbox-next").onclick = (e) => {
 
 document.addEventListener("keydown", (e) => {
   if (lightbox.classList.contains("hidden")) return;
-
   switch (e.key) {
     case "Escape":
-      if (zoomed) {
-        resetZoom();
-      } else {
-        closeLightbox();
-      }
+      if (zoomed) resetZoom();
+      else closeLightbox();
       break;
     case "ArrowLeft":
       lightboxPrev();
@@ -380,3 +655,9 @@ document.addEventListener("keydown", (e) => {
       break;
   }
 });
+
+// ===========================================
+// Start
+// ===========================================
+
+init();
