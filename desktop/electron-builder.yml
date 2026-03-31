@@ -1,0 +1,15 @@
+appId: com.sunnygong.scloud
+productName: sCloud
+directories:
+  output: dist
+files:
+  - main.js
+  - preload.js
+  - renderer/**/*
+win:
+  target: nsis
+nsis:
+  oneClick: true
+  allowToChangeInstallationDirectory: false
+mac:
+  target: dmg

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline';">
+  <title>sCloud</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header id="toolbar">
+    <span id="photo-count">sCloud</span>
+    <div id="zoom-control">
+      <span class="zoom-icon">-</span>
+      <input type="range" id="zoom-slider" min="0" max="100" step="1" value="12">
+      <span class="zoom-icon">+</span>
+    </div>
+    <button id="settings-btn" title="Settings">&#9881;</button>
+    <button id="nav-toggle" title="Timeline">&#9776;</button>
+  </header>
+
+  <main id="gallery"></main>
+
+  <nav id="timeline-nav" class="hidden">
+    <div id="timeline-content"></div>
+  </nav>
+  <div id="timeline-backdrop" class="hidden"></div>
+
+  <div id="scroll-indicator" class="hidden"></div>
+
+  <!-- Settings panel -->
+  <div id="settings-panel" class="hidden">
+    <div id="settings-backdrop"></div>
+    <div id="settings-content">
+      <h2>sCloud Settings</h2>
+      <label>Server URL</label>
+      <div class="settings-row">
+        <input type="text" id="server-url-input" placeholder="https://photos.sunnygong.com">
+        <button id="save-url-btn">Save</button>
+      </div>
+      <div id="connection-status"></div>
+      <hr>
+      <label>Thumbnail Cache</label>
+      <div id="cache-stats">Loading...</div>
+      <div class="settings-row">
+        <button id="open-cache-btn">Open Folder</button>
+        <button id="clear-cache-btn">Clear Cache</button>
+      </div>
+      <hr>
+      <button id="close-settings-btn">Close</button>
+    </div>
+  </div>
+
+  <!-- Lightbox -->
+  <div id="lightbox" class="hidden">
+    <div id="lightbox-backdrop"></div>
+    <div id="lightbox-img-container">
+      <img id="lightbox-img" src="">
+    </div>
+    <div id="lightbox-spinner" class="spinner hidden"></div>
+    <button id="lightbox-close">&times;</button>
+    <button id="lightbox-prev">&lsaquo;</button>
+    <button id="lightbox-next">&rsaquo;</button>
+    <div id="lightbox-info"></div>
+    <button id="lightbox-meta" title="Photo Info">&#9432;</button>
+    <div id="meta-panel" class="hidden">
+      <div id="meta-content"></div>
+    </div>
+    <div id="film-strip"></div>
+  </div>
+
+  <script src="bridge.js"></script>
+  <script src="app.js"></script>
+  <script src="settings.js"></script>
+</body>
+</html>

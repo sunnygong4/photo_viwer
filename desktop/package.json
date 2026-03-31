@@ -1,0 +1,17 @@
+{
+  "name": "scloud",
+  "version": "1.0.0",
+  "description": "sCloud — Photo gallery viewer with local thumbnail caching",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win",
+    "build:mac": "electron-builder --mac"
+  },
+  "author": "Sunny Gong",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "electron-builder": "^26.0.0"
+  }
+}
