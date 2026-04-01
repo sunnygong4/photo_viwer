@@ -282,11 +282,9 @@ function checkVisibleThumbs() {
       if (rect.top < viewH + 1000 && rect.bottom > -1000) {
         const src = img.dataset.src;
         delete img.dataset.src;
-        if (window.__SCLOUD_THUMB) {
-          // Desktop mode: load via IPC with local caching
-          window.__SCLOUD_THUMB(src).then(blobUrl => {
-            if (blobUrl) img.src = blobUrl;
-          });
+        if (window.__SCLOUD_THUMB_URL) {
+          // Desktop mode: use custom protocol for direct cached file serving
+          img.src = window.__SCLOUD_THUMB_URL(src);
         } else {
           img.src = src;
         }
@@ -426,6 +424,16 @@ document.addEventListener("wheel", (e) => {
 // Timeline Navigator
 // ===========================================
 
+// Jump to an element and force-load sections that become visible
+function jumpToElement(el) {
+  if (!el) return;
+  el.scrollIntoView({ behavior: "instant" });
+  setTimeout(() => {
+    checkVisibleSections();
+    checkVisibleThumbs();
+  }, 50);
+}
+
 function buildTimelineNav(tree) {
   timelineContent.innerHTML = "";
   let lastYear = null;
@@ -437,8 +445,8 @@ function buildTimelineNav(tree) {
       yearEl.className = "nav-year";
       yearEl.textContent = mg.year;
       yearEl.onclick = () => {
-        document.getElementById(`year-${mg.year}`)?.scrollIntoView({ behavior: "smooth" });
         closeTimeline();
+        jumpToElement(document.getElementById(`year-${mg.year}`));
       };
       timelineContent.appendChild(yearEl);
     }
@@ -448,8 +456,8 @@ function buildTimelineNav(tree) {
     const total = mg.days.reduce((s, d) => s + d.count, 0);
     monthEl.innerHTML = `<span>${mg.monthName}</span><span class="count">${total.toLocaleString()}</span>`;
     monthEl.onclick = () => {
-      document.getElementById(`month-${mg.month}`)?.scrollIntoView({ behavior: "smooth" });
       closeTimeline();
+      jumpToElement(document.getElementById(`month-${mg.month}`));
     };
     timelineContent.appendChild(monthEl);
   }
@@ -460,8 +468,8 @@ function buildTimelineNav(tree) {
     colEl.className = "nav-year";
     colEl.textContent = col.name.replace(".x", "");
     colEl.onclick = () => {
-      document.getElementById(`col-${col.name}`)?.scrollIntoView({ behavior: "smooth" });
       closeTimeline();
+      jumpToElement(document.getElementById(`col-${col.name}`));
     };
     timelineContent.appendChild(colEl);
   }

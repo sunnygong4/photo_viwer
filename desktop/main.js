@@ -158,8 +158,48 @@ ipcMain.handle("photo-url", (_event, apiPath) => {
   return `${config.serverUrl}${apiPath}`;
 });
 
+// Register custom protocol for serving cached thumbnails directly (no base64 IPC overhead)
+protocol.registerSchemesAsPrivileged([
+  { scheme: "scloud-thumb", privileges: { bypassCSP: true, supportFetchAPI: true, stream: true } },
+]);
+
 app.whenReady().then(() => {
   fs.mkdirSync(CACHE_DIR, { recursive: true });
+
+  // Handle scloud-thumb:// URLs — serves cached thumbnails as direct file responses
+  // URL format: scloud-thumb://thumb/month/day/file.jpg?w=100&q=50
+  protocol.handle("scloud-thumb", async (request) => {
+    const url = new URL(request.url);
+    // pathname: /month/day/file.jpg  (host is "thumb")
+    const thumbPath = url.pathname.replace(/^\//, ""); // month/day/file.jpg
+    const qs = url.search || "";
+    const qsKey = qs ? qs.replace(/[?&=]/g, "_") : "_default";
+    const cachePath = path.join(CACHE_DIR, thumbPath, qsKey);
+
+    // Try serving from cache first
+    try {
+      fs.accessSync(cachePath);
+      const data = fs.readFileSync(cachePath);
+      return new Response(data, {
+        headers: { "Content-Type": "image/jpeg", "Cache-Control": "max-age=31536000" },
+      });
+    } catch {}
+
+    // Cache miss — fetch from server, save, then serve
+    const apiPath = `/api/thumb/${thumbPath}${qs}`;
+    const serverUrl = `${config.serverUrl}${apiPath}`;
+    try {
+      const data = await fetchUrl(serverUrl);
+      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+      fs.writeFileSync(cachePath, data);
+      return new Response(data, {
+        headers: { "Content-Type": "image/jpeg", "Cache-Control": "max-age=31536000" },
+      });
+    } catch (err) {
+      return new Response(`Fetch error: ${err.message}`, { status: 502 });
+    }
+  });
+
   createWindow();
 
   app.on("activate", () => {

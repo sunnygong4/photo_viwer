@@ -418,6 +418,18 @@ document.addEventListener("wheel", (e) => {
 // Timeline Navigator
 // ===========================================
 
+// Jump to an element and force-load sections that become visible
+function jumpToElement(el) {
+  if (!el) return;
+  // Use instant scroll to avoid conflicts with ongoing smooth scrolls
+  el.scrollIntoView({ behavior: "instant" });
+  // After jumping, immediately check and load sections now in view
+  setTimeout(() => {
+    checkVisibleSections();
+    checkVisibleThumbs();
+  }, 50);
+}
+
 function buildTimelineNav(tree) {
   timelineContent.innerHTML = "";
   let lastYear = null;
@@ -429,8 +441,8 @@ function buildTimelineNav(tree) {
       yearEl.className = "nav-year";
       yearEl.textContent = mg.year;
       yearEl.onclick = () => {
-        document.getElementById(`year-${mg.year}`)?.scrollIntoView({ behavior: "smooth" });
         closeTimeline();
+        jumpToElement(document.getElementById(`year-${mg.year}`));
       };
       timelineContent.appendChild(yearEl);
     }
@@ -440,8 +452,8 @@ function buildTimelineNav(tree) {
     const total = mg.days.reduce((s, d) => s + d.count, 0);
     monthEl.innerHTML = `<span>${mg.monthName}</span><span class="count">${total.toLocaleString()}</span>`;
     monthEl.onclick = () => {
-      document.getElementById(`month-${mg.month}`)?.scrollIntoView({ behavior: "smooth" });
       closeTimeline();
+      jumpToElement(document.getElementById(`month-${mg.month}`));
     };
     timelineContent.appendChild(monthEl);
   }
@@ -452,8 +464,8 @@ function buildTimelineNav(tree) {
     colEl.className = "nav-year";
     colEl.textContent = col.name.replace(".x", "");
     colEl.onclick = () => {
-      document.getElementById(`col-${col.name}`)?.scrollIntoView({ behavior: "smooth" });
       closeTimeline();
+      jumpToElement(document.getElementById(`col-${col.name}`));
     };
     timelineContent.appendChild(colEl);
   }

@@ -29,17 +29,16 @@
     });
   };
 
-  // Provide a function to load thumbnails via IPC with local caching
-  // This returns a blob URL from the cached/fetched data
-  window.__SCLOUD_THUMB = async function (apiPath) {
-    const result = await window.scloud.thumbFetch(apiPath);
-    if (!result.ok) return null;
-    // Convert base64 to blob URL
-    const binary = atob(result.data);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const blob = new Blob([bytes], { type: "image/jpeg" });
-    return URL.createObjectURL(blob);
+  // Convert API thumb paths to custom protocol URLs served directly by main process
+  // No IPC round-trip or base64 encoding — Electron serves cached files natively
+  window.__SCLOUD_THUMB_URL = function (apiPath) {
+    // apiPath like /api/thumb/2026.03.x/2026.03.17/IMG_5318.JPG?w=100&q=50
+    const stripped = apiPath.replace(/^\/api\/thumb\//, "");
+    // Split path and query string
+    const qIdx = stripped.indexOf("?");
+    const pathPart = qIdx >= 0 ? stripped.substring(0, qIdx) : stripped;
+    const qsPart = qIdx >= 0 ? stripped.substring(qIdx) : "";
+    return `scloud-thumb://thumb/${pathPart}${qsPart}`;
   };
 
   // Provide a function to get full photo URL from server
