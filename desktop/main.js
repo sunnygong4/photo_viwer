@@ -21,6 +21,9 @@ function saveConfig(config) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
 }
 
+// Force dedicated GPU (NVIDIA/AMD) instead of integrated graphics
+app.commandLine.appendSwitch("force_high_performance_gpu");
+
 let config = loadConfig();
 let mainWindow;
 
