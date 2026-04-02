@@ -9,4 +9,12 @@ contextBridge.exposeInMainWorld("scloud", {
   apiFetch: (path) => ipcRenderer.invoke("api-fetch", path),
   thumbFetch: (path) => ipcRenderer.invoke("thumb-fetch", path),
   photoUrl: (path) => ipcRenderer.invoke("photo-url", path),
+  // Sync
+  getSyncConfig: () => ipcRenderer.invoke("get-sync-config"),
+  setSyncConfig: (cfg) => ipcRenderer.invoke("set-sync-config", cfg),
+  pickFolder: (defaultPath) => ipcRenderer.invoke("pick-folder", defaultPath),
+  startSync: () => ipcRenderer.invoke("start-sync"),
+  abortSync: () => ipcRenderer.invoke("abort-sync"),
+  onSyncProgress: (cb) => ipcRenderer.on("sync-progress", (_e, msg) => cb(msg)),
+  offSyncProgress: () => ipcRenderer.removeAllListeners("sync-progress"),
 });

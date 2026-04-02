@@ -63,4 +63,90 @@
   };
 
   openBtn.onclick = () => window.scloud.openCacheFolder();
+
+  // ── Sync ────────────────────────────────────────────────
+  const syncSourceInput = document.getElementById("sync-source-input");
+  const syncDestInput   = document.getElementById("sync-dest-input");
+  const pickSourceBtn   = document.getElementById("pick-source-btn");
+  const pickDestBtn     = document.getElementById("pick-dest-btn");
+  const syncSaveBtn     = document.getElementById("sync-save-btn");
+  const syncStartBtn    = document.getElementById("sync-start-btn");
+  const syncAbortBtn    = document.getElementById("sync-abort-btn");
+  const syncStatus      = document.getElementById("sync-status");
+  const syncProgressWrap = document.getElementById("sync-progress-bar-wrap");
+  const syncProgressBar  = document.getElementById("sync-progress-bar");
+
+  // Load saved sync paths
+  const syncCfg = await window.scloud.getSyncConfig();
+  syncSourceInput.value = syncCfg.syncSource || "P:\\Photos";
+  syncDestInput.value   = syncCfg.syncDest   || "";
+
+  pickSourceBtn.onclick = async () => {
+    const folder = await window.scloud.pickFolder(syncSourceInput.value);
+    if (folder) syncSourceInput.value = folder;
+  };
+
+  pickDestBtn.onclick = async () => {
+    const folder = await window.scloud.pickFolder(syncDestInput.value);
+    if (folder) syncDestInput.value = folder;
+  };
+
+  syncSaveBtn.onclick = async () => {
+    await window.scloud.setSyncConfig({
+      syncSource: syncSourceInput.value.trim(),
+      syncDest:   syncDestInput.value.trim(),
+    });
+    syncStatus.textContent = "Paths saved.";
+    setTimeout(() => { syncStatus.textContent = ""; }, 2000);
+  };
+
+  let syncing = false;
+
+  syncStartBtn.onclick = async () => {
+    if (syncing) return;
+    // Auto-save paths before starting
+    await window.scloud.setSyncConfig({
+      syncSource: syncSourceInput.value.trim(),
+      syncDest:   syncDestInput.value.trim(),
+    });
+
+    syncing = true;
+    syncStartBtn.disabled = true;
+    syncAbortBtn.classList.remove("hidden");
+    syncProgressWrap.classList.remove("hidden");
+    syncProgressBar.style.width = "0%";
+    syncStatus.textContent = "Starting sync...";
+
+    window.scloud.offSyncProgress();
+    window.scloud.onSyncProgress((msg) => {
+      syncStatus.textContent = msg.message;
+      if (msg.total && msg.total > 0) {
+        const pct = Math.round(((msg.copied + msg.skipped + msg.errors) / msg.total) * 100);
+        syncProgressBar.style.width = pct + "%";
+      }
+      if (msg.phase === "done" || msg.phase === "aborted") {
+        syncProgressBar.style.width = "100%";
+        syncProgressBar.style.background = msg.phase === "done" ? "#4caf50" : "#ff9800";
+        finishSync();
+      }
+    });
+
+    const result = await window.scloud.startSync();
+    if (!result.ok) {
+      syncStatus.textContent = "Error: " + result.error;
+      finishSync();
+    }
+  };
+
+  syncAbortBtn.onclick = () => {
+    window.scloud.abortSync();
+    syncStatus.textContent = "Stopping...";
+  };
+
+  function finishSync() {
+    syncing = false;
+    syncStartBtn.disabled = false;
+    syncAbortBtn.classList.add("hidden");
+    window.scloud.offSyncProgress();
+  }
 })();

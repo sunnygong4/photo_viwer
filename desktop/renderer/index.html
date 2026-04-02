@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob: https: scloud-thumb:; style-src 'self' 'unsafe-inline';">
   <title>sCloud</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -46,6 +46,27 @@
         <button id="open-cache-btn">Open Folder</button>
         <button id="clear-cache-btn">Clear Cache</button>
       </div>
+      <hr>
+      <label>Sync Photos to NAS</label>
+      <div class="settings-row">
+        <input type="text" id="sync-source-input" placeholder="P:\Photos">
+        <button id="pick-source-btn" title="Browse">&#128193;</button>
+      </div>
+      <div class="settings-label-small">Source (local drive with recent photos)</div>
+      <div class="settings-row">
+        <input type="text" id="sync-dest-input" placeholder="\\NAS\Photos">
+        <button id="pick-dest-btn" title="Browse">&#128193;</button>
+      </div>
+      <div class="settings-label-small">Destination (NAS network share path)</div>
+      <div class="settings-row">
+        <button id="sync-save-btn">Save Paths</button>
+        <button id="sync-start-btn" class="sync-btn">&#9654; Sync Now</button>
+        <button id="sync-abort-btn" class="hidden">&#9646;&#9646; Stop</button>
+      </div>
+      <div id="sync-progress-bar-wrap" class="hidden">
+        <div id="sync-progress-bar"></div>
+      </div>
+      <div id="sync-status"></div>
       <hr>
       <button id="close-settings-btn">Close</button>
     </div>

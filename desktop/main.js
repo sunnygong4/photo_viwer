@@ -8,11 +8,21 @@ const http = require("http");
 const CONFIG_PATH = path.join(app.getPath("userData"), "config.json");
 const CACHE_DIR = path.join(app.getPath("userData"), "thumbcache");
 
+const SYNC_EXTS = new Set([
+  ".jpg", ".jpeg", ".heic", ".heif",
+  ".cr2", ".cr3", ".nef", ".arw", ".raw", ".dng",
+  ".rw2", ".orf", ".raf", ".rwl", ".pef", ".srw"
+]);
+
 function loadConfig() {
   try {
     return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
   } catch {
-    return { serverUrl: "https://photos.sunnygong.com" };
+    return {
+      serverUrl: "https://photos.sunnygong.com",
+      syncSource: "P:\\Photos",
+      syncDest: "",
+    };
   }
 }
 
@@ -159,6 +169,112 @@ ipcMain.handle("thumb-fetch", async (_event, apiPath) => {
 ipcMain.handle("photo-url", (_event, apiPath) => {
   // Return the full URL for the photo (opened in lightbox)
   return `${config.serverUrl}${apiPath}`;
+});
+
+ipcMain.handle("get-sync-config", () => ({
+  syncSource: config.syncSource || "P:\\Photos",
+  syncDest: config.syncDest || "",
+}));
+
+ipcMain.handle("set-sync-config", (_event, { syncSource, syncDest }) => {
+  config.syncSource = syncSource;
+  config.syncDest = syncDest;
+  saveConfig(config);
+  return { ok: true };
+});
+
+ipcMain.handle("pick-folder", async (_event, defaultPath) => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    defaultPath: defaultPath || "P:\\Photos",
+    properties: ["openDirectory"],
+  });
+  if (result.canceled || !result.filePaths.length) return null;
+  return result.filePaths[0];
+});
+
+// Walk a directory recursively, returning all files with target extensions
+function walkDir(dir, exts) {
+  const results = [];
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...walkDir(full, exts));
+    } else if (exts.has(path.extname(entry.name).toLowerCase())) {
+      results.push(full);
+    }
+  }
+  return results;
+}
+
+let syncAbort = false;
+
+ipcMain.handle("abort-sync", () => { syncAbort = true; });
+
+ipcMain.handle("start-sync", async (event) => {
+  const src = config.syncSource || "P:\\Photos";
+  const dest = config.syncDest || "";
+
+  if (!dest) return { ok: false, error: "No destination folder configured." };
+
+  // Verify source and dest exist
+  try { fs.accessSync(src); } catch { return { ok: false, error: `Source not found: ${src}` }; }
+  try { fs.accessSync(dest); } catch { return { ok: false, error: `Destination not found: ${dest}` }; }
+
+  syncAbort = false;
+
+  const send = (msg) => {
+    try { event.sender.send("sync-progress", msg); } catch {}
+  };
+
+  send({ phase: "scanning", message: "Scanning source folder..." });
+
+  let allFiles;
+  try {
+    allFiles = walkDir(src, SYNC_EXTS);
+  } catch (err) {
+    return { ok: false, error: `Scan failed: ${err.message}` };
+  }
+
+  send({ phase: "scanning", message: `Found ${allFiles.length.toLocaleString()} files. Checking destination...` });
+
+  let copied = 0, skipped = 0, errors = 0;
+  const total = allFiles.length;
+
+  for (let i = 0; i < allFiles.length; i++) {
+    if (syncAbort) {
+      send({ phase: "aborted", message: `Aborted. Copied ${copied}, skipped ${skipped}.`, copied, skipped, errors, total });
+      return { ok: true, aborted: true, copied, skipped, errors };
+    }
+
+    const srcFile = allFiles[i];
+    // Preserve folder structure relative to source root
+    const rel = path.relative(src, srcFile);
+    const destFile = path.join(dest, rel);
+
+    // Progress update every 50 files
+    if (i % 50 === 0) {
+      send({ phase: "syncing", message: `Copying... ${i}/${total}`, copied, skipped, errors, total, current: rel });
+    }
+
+    // Skip if already exists with same size
+    try {
+      const srcStat = fs.statSync(srcFile);
+      try {
+        const destStat = fs.statSync(destFile);
+        if (destStat.size === srcStat.size) { skipped++; continue; }
+      } catch {} // dest doesn't exist, proceed to copy
+
+      fs.mkdirSync(path.dirname(destFile), { recursive: true });
+      fs.copyFileSync(srcFile, destFile);
+      copied++;
+    } catch (err) {
+      errors++;
+    }
+  }
+
+  send({ phase: "done", message: `Done! Copied ${copied}, skipped ${skipped}${errors ? `, ${errors} errors` : ""}.`, copied, skipped, errors, total });
+  return { ok: true, copied, skipped, errors };
 });
 
 // Register custom protocol for serving cached thumbnails directly (no base64 IPC overhead)
