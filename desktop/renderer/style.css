@@ -503,8 +503,9 @@ body {
 body.extreme-zoom .day-label { display: none; }
 body.extreme-zoom .month-header { padding: 2px 4px; font-size: 10px; min-height: auto; }
 body.extreme-zoom .year-header { padding: 4px 4px 2px; font-size: 14px; }
-body.extreme-zoom .day-grid { gap: 0; }
+body.extreme-zoom .day-grid { gap: 0; content-visibility: auto; contain-intrinsic-size: auto 200px; }
 body.extreme-zoom .photo-cell img { transition: none; }
+body.extreme-zoom .photo-cell { contain: strict; }
 
 /* --- Settings panel (desktop only) --- */
 #settings-btn {

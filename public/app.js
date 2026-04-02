@@ -368,19 +368,28 @@ function unloadSection(grid) {
 // Zoom Control
 // ===========================================
 
+let zoomDebounceTimer = null;
 zoomSlider.addEventListener("input", () => {
   const cols = sliderToCols(parseInt(zoomSlider.value));
+  // Lightweight: just update CSS variable (GPU-accelerated grid reflow)
   document.documentElement.style.setProperty("--grid-cols", cols);
   localStorage.setItem("gridCols", cols);
   updateExtremeZoomClass(cols);
-  updateAllPlaceholderHeights();
 
-  // If thumbnail tier changed, re-render loaded sections
-  const newTier = JSON.stringify(getThumbParams());
-  if (newTier !== currentThumbTier) {
-    currentThumbTier = newTier;
-    reloadVisibleSections();
-  }
+  // Debounce the heavy work (placeholder recalc, section reload) while dragging
+  clearTimeout(zoomDebounceTimer);
+  zoomDebounceTimer = setTimeout(() => {
+    updateAllPlaceholderHeights();
+
+    // If thumbnail tier changed, re-render loaded sections
+    const newTier = JSON.stringify(getThumbParams());
+    if (newTier !== currentThumbTier) {
+      currentThumbTier = newTier;
+      reloadVisibleSections();
+    }
+    checkVisibleSections();
+    checkVisibleThumbs();
+  }, 150);
 });
 
 function updateExtremeZoomClass(cols) {
