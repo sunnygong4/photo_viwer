@@ -10,11 +10,11 @@ contextBridge.exposeInMainWorld("scloud", {
   thumbFetch: (path) => ipcRenderer.invoke("thumb-fetch", path),
   photoUrl: (path) => ipcRenderer.invoke("photo-url", path),
   // Sync
-  getSyncConfig: () => ipcRenderer.invoke("get-sync-config"),
-  setSyncConfig: (cfg) => ipcRenderer.invoke("set-sync-config", cfg),
-  pickFolder: (defaultPath) => ipcRenderer.invoke("pick-folder", defaultPath),
-  startSync: () => ipcRenderer.invoke("start-sync"),
+  scanLocal: () => ipcRenderer.invoke("scan-local"),
+  syncMonth: (month) => ipcRenderer.invoke("sync-month", { month }),
   abortSync: () => ipcRenderer.invoke("abort-sync"),
-  onSyncProgress: (cb) => ipcRenderer.on("sync-progress", (_e, msg) => cb(msg)),
-  offSyncProgress: () => ipcRenderer.removeAllListeners("sync-progress"),
+  onScanProgress: (cb) => ipcRenderer.on("scan-local-progress", (_e, msg) => cb(msg)),
+  offScanProgress: () => ipcRenderer.removeAllListeners("scan-local-progress"),
+  onMonthProgress: (cb) => ipcRenderer.on("sync-month-progress", (_e, msg) => cb(msg)),
+  offMonthProgress: () => ipcRenderer.removeAllListeners("sync-month-progress"),
 });

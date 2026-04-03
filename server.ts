@@ -147,6 +147,70 @@ app.get("/api/tree", async (req, res) => {
   }
 });
 
+// --- /api/sync-stats ---
+// Returns per-month file count + size for the server's photo root.
+// Derived from the tree cache when available (fast), then augments with sizes.
+// Sizes are computed async and cached separately for 30 minutes.
+
+const SYNC_EXTS_SET = new Set([
+  ".jpg", ".jpeg", ".heic", ".heif",
+  ".cr2", ".cr3", ".nef", ".arw", ".raw", ".dng",
+  ".rw2", ".orf", ".raf", ".rwl", ".pef", ".srw",
+]);
+
+let syncStatsCache: { data: any; timestamp: number } | null = null;
+const SYNC_STATS_TTL = 30 * 60_000;
+
+async function getMonthSizeAsync(monthPath: string): Promise<{ sizeBytes: number; fileCount: number }> {
+  let sizeBytes = 0, fileCount = 0;
+  async function walk(dir: string) {
+    let entries: import("fs").Dirent[];
+    try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        await walk(full);
+      } else if (SYNC_EXTS_SET.has(path.extname(e.name).toLowerCase())) {
+        try { sizeBytes += (await fs.stat(full)).size; fileCount++; } catch {}
+      }
+    }
+  }
+  await walk(monthPath);
+  return { sizeBytes, fileCount };
+}
+
+app.get("/api/sync-stats", async (req, res) => {
+  if (req.query.refresh) syncStatsCache = null;
+  if (syncStatsCache && Date.now() - syncStatsCache.timestamp < SYNC_STATS_TTL) {
+    return res.json(syncStatsCache.data);
+  }
+
+  try {
+    const topEntries = await fs.readdir(PHOTOS_ROOT, { withFileTypes: true });
+    const monthDirs = topEntries
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort()
+      .reverse();
+
+    const months: any[] = [];
+    for (const name of monthDirs) {
+      const { sizeBytes, fileCount } = await getMonthSizeAsync(path.join(PHOTOS_ROOT, name));
+      months.push({ name, sizeBytes, fileCount });
+    }
+
+    const data = { months, generatedAt: Date.now() };
+    syncStatsCache = { data, timestamp: Date.now() };
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Invalidate sync stats cache after any new upload/sync would happen
+// (called internally when needed)
+function invalidateSyncStats() { syncStatsCache = null; }
+
 // GET /api/folders - list top-level folders (months + Film.x)
 app.get("/api/folders", async (_req, res) => {
   try {

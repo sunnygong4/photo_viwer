@@ -75,19 +75,26 @@
     <div id="sync-backdrop"></div>
     <div id="sync-content">
       <div id="sync-header">
-        <h2>&#8645; Sync Photos</h2>
-        <div id="sync-paths">P:\Photos &rarr; Z:\Photos</div>
-      </div>
-      <div id="sync-controls">
-        <button id="sync-start-btn" class="sync-action-btn">&#9654; Start Sync</button>
-        <button id="sync-abort-btn" class="sync-action-btn sync-abort hidden">&#9646;&#9646; Stop</button>
+        <div>
+          <h2>&#8645; Sync Photos</h2>
+          <div id="sync-paths">P:\Photos &rarr; Z:\Photos</div>
+        </div>
         <button id="sync-close-btn" class="sync-close-btn">&#10005;</button>
       </div>
-      <div id="sync-overall">
-        <div id="sync-overall-bar-wrap"><div id="sync-overall-bar"></div></div>
-        <div id="sync-summary"></div>
+      <div id="sync-summary"></div>
+      <div id="sync-table-wrap">
+        <table id="sync-table">
+          <thead>
+            <tr>
+              <th class="col-month">Month</th>
+              <th class="col-local">Local (P:\)</th>
+              <th class="col-server">Server (Z:\)</th>
+              <th class="col-action"></th>
+            </tr>
+          </thead>
+          <tbody id="sync-table-body"></tbody>
+        </table>
       </div>
-      <div id="sync-log"></div>
     </div>
   </div>
 
