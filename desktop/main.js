@@ -171,110 +171,175 @@ ipcMain.handle("photo-url", (_event, apiPath) => {
   return `${config.serverUrl}${apiPath}`;
 });
 
-ipcMain.handle("get-sync-config", () => ({
-  syncSource: config.syncSource || "P:\\Photos",
-  syncDest: config.syncDest || "",
-}));
+// ── Smart Sync ──────────────────────────────────────────────────────────────
+const SYNC_SRC  = "P:\\Photos";
+const SYNC_DEST = "Z:\\Photos";
+// Tolerance: dest folder is considered "matched" if its size is within 1% of source
+const SIZE_TOLERANCE = 0.01;
 
-ipcMain.handle("set-sync-config", (_event, { syncSource, syncDest }) => {
-  config.syncSource = syncSource;
-  config.syncDest = syncDest;
-  saveConfig(config);
-  return { ok: true };
-});
-
-ipcMain.handle("pick-folder", async (_event, defaultPath) => {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    defaultPath: defaultPath || "P:\\Photos",
-    properties: ["openDirectory"],
-  });
-  if (result.canceled || !result.filePaths.length) return null;
-  return result.filePaths[0];
-});
-
-// Walk a directory recursively, returning all files with target extensions
-function walkDir(dir, exts) {
-  const results = [];
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      results.push(...walkDir(full, exts));
-    } else if (exts.has(path.extname(entry.name).toLowerCase())) {
-      results.push(full);
+// Sum file sizes recursively (only SYNC_EXTS files)
+function getDirSize(dir) {
+  let total = 0;
+  try {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        total += getDirSize(full);
+      } else if (SYNC_EXTS.has(path.extname(entry.name).toLowerCase())) {
+        try { total += fs.statSync(full).size; } catch {}
+      }
     }
+  } catch {}
+  return total;
+}
+
+function sizesMatch(srcSize, destSize) {
+  if (srcSize === 0) return true;
+  return Math.abs(srcSize - destSize) / srcSize <= SIZE_TOLERANCE;
+}
+
+function fmtSize(bytes) {
+  if (bytes >= 1e9) return (bytes / 1e9).toFixed(1) + " GB";
+  if (bytes >= 1e6) return (bytes / 1e6).toFixed(1) + " MB";
+  return (bytes / 1e3).toFixed(0) + " KB";
+}
+
+// Copy all SYNC_EXTS files from srcDir → destDir, returns { copied, errors }
+function syncDayDir(srcDir, destDir, abortCheck) {
+  let copied = 0, errors = 0;
+  let entries;
+  try { entries = fs.readdirSync(srcDir, { withFileTypes: true }); } catch { return { copied, errors: 1 }; }
+
+  for (const entry of entries) {
+    if (abortCheck()) break;
+    if (entry.isDirectory()) {
+      const r = syncDayDir(path.join(srcDir, entry.name), path.join(destDir, entry.name), abortCheck);
+      copied += r.copied; errors += r.errors;
+      continue;
+    }
+    if (!SYNC_EXTS.has(path.extname(entry.name).toLowerCase())) continue;
+    const srcFile  = path.join(srcDir,  entry.name);
+    const destFile = path.join(destDir, entry.name);
+    try {
+      const srcSize = fs.statSync(srcFile).size;
+      try {
+        if (fs.statSync(destFile).size === srcSize) continue; // already there
+      } catch {}
+      fs.mkdirSync(destDir, { recursive: true });
+      fs.copyFileSync(srcFile, destFile);
+      copied++;
+    } catch { errors++; }
   }
-  return results;
+  return { copied, errors };
 }
 
 let syncAbort = false;
-
 ipcMain.handle("abort-sync", () => { syncAbort = true; });
 
 ipcMain.handle("start-sync", async (event) => {
-  const src = config.syncSource || "P:\\Photos";
-  const dest = config.syncDest || "";
+  const src  = SYNC_SRC;
+  const dest = SYNC_DEST;
 
-  if (!dest) return { ok: false, error: "No destination folder configured." };
-
-  // Verify source and dest exist
-  try { fs.accessSync(src); } catch { return { ok: false, error: `Source not found: ${src}` }; }
+  try { fs.accessSync(src);  } catch { return { ok: false, error: `Source not found: ${src}` }; }
   try { fs.accessSync(dest); } catch { return { ok: false, error: `Destination not found: ${dest}` }; }
 
   syncAbort = false;
+  const send = (msg) => { try { event.sender.send("sync-progress", msg); } catch {} };
 
-  const send = (msg) => {
-    try { event.sender.send("sync-progress", msg); } catch {}
-  };
-
-  send({ phase: "scanning", message: "Scanning source folder..." });
-
-  let allFiles;
+  // List top-level month folders in source (e.g. 2026.02.x)
+  let monthFolders;
   try {
-    allFiles = walkDir(src, SYNC_EXTS);
+    monthFolders = fs.readdirSync(src, { withFileTypes: true })
+      .filter(e => e.isDirectory())
+      .map(e => e.name)
+      .sort();
   } catch (err) {
-    return { ok: false, error: `Scan failed: ${err.message}` };
+    return { ok: false, error: `Cannot read source: ${err.message}` };
   }
 
-  send({ phase: "scanning", message: `Found ${allFiles.length.toLocaleString()} files. Checking destination...` });
+  let totalCopied = 0, totalErrors = 0, monthsSkipped = 0, daysSkipped = 0;
 
-  let copied = 0, skipped = 0, errors = 0;
-  const total = allFiles.length;
-
-  for (let i = 0; i < allFiles.length; i++) {
+  for (const month of monthFolders) {
     if (syncAbort) {
-      send({ phase: "aborted", message: `Aborted. Copied ${copied}, skipped ${skipped}.`, copied, skipped, errors, total });
-      return { ok: true, aborted: true, copied, skipped, errors };
+      send({ phase: "aborted", message: `Stopped. Copied ${totalCopied} files.`, totalCopied, totalErrors });
+      return { ok: true, aborted: true };
     }
 
-    const srcFile = allFiles[i];
-    // Preserve folder structure relative to source root
-    const rel = path.relative(src, srcFile);
-    const destFile = path.join(dest, rel);
+    const srcMonth  = path.join(src,  month);
+    const destMonth = path.join(dest, month);
 
-    // Progress update every 50 files
-    if (i % 50 === 0) {
-      send({ phase: "syncing", message: `Copying... ${i}/${total}`, copied, skipped, errors, total, current: rel });
+    send({ phase: "checking", message: `Checking ${month}...`, month });
+
+    // Compare month-level sizes first
+    const srcMonthSize  = getDirSize(srcMonth);
+    const destMonthSize = getDirSize(destMonth);
+
+    if (sizesMatch(srcMonthSize, destMonthSize)) {
+      monthsSkipped++;
+      send({ phase: "month-skip", message: `${month}  ✓  ${fmtSize(srcMonthSize)} — matched, skipped`, month, srcSize: srcMonthSize, destSize: destMonthSize });
+      continue;
     }
 
-    // Skip if already exists with same size
+    send({ phase: "month-diff", message: `${month}  ↑  src ${fmtSize(srcMonthSize)} / dest ${fmtSize(destMonthSize)} — checking days...`, month });
+
+    // Drill into day subfolders
+    let dayFolders;
     try {
-      const srcStat = fs.statSync(srcFile);
-      try {
-        const destStat = fs.statSync(destFile);
-        if (destStat.size === srcStat.size) { skipped++; continue; }
-      } catch {} // dest doesn't exist, proceed to copy
+      dayFolders = fs.readdirSync(srcMonth, { withFileTypes: true })
+        .filter(e => e.isDirectory())
+        .map(e => e.name)
+        .sort();
+    } catch { dayFolders = []; }
 
-      fs.mkdirSync(path.dirname(destFile), { recursive: true });
-      fs.copyFileSync(srcFile, destFile);
-      copied++;
-    } catch (err) {
-      errors++;
+    // Also handle loose files at month root (non-day-organized)
+    const looseSrcFiles = fs.readdirSync(srcMonth, { withFileTypes: true })
+      .filter(e => e.isFile() && SYNC_EXTS.has(path.extname(e.name).toLowerCase()));
+
+    for (const day of dayFolders) {
+      if (syncAbort) break;
+
+      const srcDay  = path.join(srcMonth,  day);
+      const destDay = path.join(destMonth, day);
+
+      const srcDaySize  = getDirSize(srcDay);
+      const destDaySize = getDirSize(destDay);
+
+      if (sizesMatch(srcDaySize, destDaySize)) {
+        daysSkipped++;
+        send({ phase: "day-skip", message: `  ${day}  ✓  ${fmtSize(srcDaySize)}`, month, day });
+        continue;
+      }
+
+      send({ phase: "day-sync", message: `  ${day}  ↑  ${fmtSize(srcDaySize)} — copying...`, month, day });
+
+      const { copied, errors } = syncDayDir(srcDay, destDay, () => syncAbort);
+      totalCopied += copied;
+      totalErrors += errors;
+
+      send({ phase: "day-done", message: `  ${day}  ✓  copied ${copied} files`, month, day, copied, errors });
+    }
+
+    // Handle loose files at month root
+    if (looseSrcFiles.length > 0) {
+      fs.mkdirSync(destMonth, { recursive: true });
+      for (const f of looseSrcFiles) {
+        if (syncAbort) break;
+        const srcFile  = path.join(srcMonth, f.name);
+        const destFile = path.join(destMonth, f.name);
+        try {
+          if (fs.statSync(destFile).size === fs.statSync(srcFile).size) continue;
+        } catch {}
+        try { fs.copyFileSync(srcFile, destFile); totalCopied++; } catch { totalErrors++; }
+      }
     }
   }
 
-  send({ phase: "done", message: `Done! Copied ${copied}, skipped ${skipped}${errors ? `, ${errors} errors` : ""}.`, copied, skipped, errors, total });
-  return { ok: true, copied, skipped, errors };
+  if (syncAbort) {
+    send({ phase: "aborted", message: `Stopped. Copied ${totalCopied} files.`, totalCopied, totalErrors });
+  } else {
+    send({ phase: "done", message: `Done! Copied ${totalCopied} files. ${monthsSkipped} months already matched.${totalErrors ? ` ${totalErrors} errors.` : ""}`, totalCopied, totalErrors, monthsSkipped });
+  }
+  return { ok: true, totalCopied, totalErrors, monthsSkipped };
 });
 
 // Register custom protocol for serving cached thumbnails directly (no base64 IPC overhead)

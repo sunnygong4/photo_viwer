@@ -507,8 +507,8 @@ body.extreme-zoom .day-grid { gap: 0; content-visibility: auto; contain-intrinsi
 body.extreme-zoom .photo-cell img { transition: none; }
 body.extreme-zoom .photo-cell { contain: strict; }
 
-/* --- Settings panel (desktop only) --- */
-#settings-btn {
+/* --- Toolbar icon buttons (desktop only) --- */
+#settings-btn, #sync-btn {
   background: none;
   border: none;
   color: #aaa;
@@ -516,7 +516,160 @@ body.extreme-zoom .photo-cell { contain: strict; }
   cursor: pointer;
   padding: 4px 8px;
 }
-#settings-btn:hover { color: #fff; }
+#settings-btn:hover, #sync-btn:hover { color: #fff; }
+#sync-btn { font-size: 20px; }
+
+/* --- Sync panel --- */
+#sync-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#sync-panel.hidden { display: none; }
+
+#sync-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.75);
+}
+
+#sync-content {
+  position: relative;
+  z-index: 1;
+  background: #1e1e1e;
+  border: 1px solid #3a3a3a;
+  border-radius: 14px;
+  width: 560px;
+  max-width: 95vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#sync-header {
+  padding: 20px 24px 12px;
+  border-bottom: 1px solid #2a2a2a;
+}
+#sync-header h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+  color: #fff;
+}
+#sync-paths {
+  font-size: 12px;
+  color: #666;
+  font-family: monospace;
+}
+
+#sync-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 24px;
+  border-bottom: 1px solid #2a2a2a;
+}
+
+.sync-action-btn {
+  background: #2e7d32;
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  padding: 8px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.sync-action-btn:hover { background: #388e3c; }
+.sync-action-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.sync-abort { background: #7b3a00; }
+.sync-abort:hover { background: #a04e00; }
+
+.sync-close-btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: #666;
+  font-size: 20px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 4px 8px;
+}
+.sync-close-btn:hover { color: #fff; }
+.sync-close-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+#sync-overall {
+  padding: 10px 24px 6px;
+  border-bottom: 1px solid #2a2a2a;
+}
+#sync-overall-bar-wrap {
+  height: 6px;
+  background: #2a2a2a;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+#sync-overall-bar {
+  height: 100%;
+  width: 0%;
+  background: #4caf50;
+  border-radius: 3px;
+  transition: width 0.4s;
+}
+#sync-overall-bar.pulse {
+  background: linear-gradient(90deg, #4caf50 40%, #81c784 60%, #4caf50);
+  background-size: 200% 100%;
+  animation: syncpulse 1.4s linear infinite;
+}
+@keyframes syncpulse {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+#sync-summary {
+  font-size: 12px;
+  color: #888;
+  min-height: 16px;
+}
+
+#sync-log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+}
+
+.sync-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  margin-bottom: 2px;
+}
+.sync-row-icon { font-size: 14px; width: 18px; text-align: center; flex-shrink: 0; }
+.sync-row-name { font-family: monospace; color: #ccc; min-width: 110px; }
+.sync-row-detail { color: #666; font-size: 12px; }
+
+.row-skip   { background: #0d1f0d; }
+.row-skip .sync-row-icon { color: #4caf50; }
+.row-skip .sync-row-name { color: #4caf50; }
+.row-skip .sync-row-detail { color: #2e7d32; }
+
+.row-diff   { background: #1a1200; }
+.row-diff .sync-row-icon { color: #ff9800; }
+.row-diff .sync-row-name { color: #ffb74d; }
+.row-diff .sync-row-detail { color: #f57c00; }
+
+.row-checking { background: #111; }
+.row-checking .sync-row-detail { color: #555; }
+
+/* --- Settings panel (desktop only) --- */
+#settings-btn {
+  /* inherits from toolbar icon buttons above */
+}
 
 #settings-panel {
   position: fixed;
@@ -617,53 +770,6 @@ body.extreme-zoom .photo-cell { contain: strict; }
   font-weight: 600;
 }
 
-/* Sync inputs */
-#sync-source-input, #sync-dest-input {
-  flex: 1;
-  background: #111;
-  border: 1px solid #444;
-  border-radius: 6px;
-  color: #fff;
-  padding: 8px 12px;
-  font-size: 13px;
-  font-family: monospace;
-}
-
-.settings-label-small {
-  font-size: 11px;
-  color: #666;
-  margin: -4px 0 8px;
-}
-
-.sync-btn {
-  background: #2e7d32 !important;
-  border-color: #388e3c !important;
-}
-.sync-btn:hover { background: #388e3c !important; }
-.sync-btn:disabled { background: #1a3d1c !important; opacity: 0.6; cursor: not-allowed; }
-
-#sync-progress-bar-wrap {
-  background: #111;
-  border-radius: 4px;
-  height: 8px;
-  margin: 8px 0 4px;
-  overflow: hidden;
-}
-#sync-progress-bar-wrap.hidden { display: none; }
-#sync-progress-bar {
-  height: 100%;
-  width: 0%;
-  background: #4caf50;
-  border-radius: 4px;
-  transition: width 0.3s;
-}
-
-#sync-status {
-  font-size: 12px;
-  color: #aaa;
-  min-height: 16px;
-  word-break: break-all;
-}
 
 /* --- Responsive --- */
 @media (max-width: 600px) {

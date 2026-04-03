@@ -15,6 +15,7 @@
       <input type="range" id="zoom-slider" min="0" max="100" step="1" value="12">
       <span class="zoom-icon">+</span>
     </div>
+    <button id="sync-btn" title="Sync P:\Photos → Z:\Photos">&#8645;</button>
     <button id="settings-btn" title="Settings">&#9881;</button>
     <button id="nav-toggle" title="Timeline">&#9776;</button>
   </header>
@@ -47,27 +48,6 @@
         <button id="clear-cache-btn">Clear Cache</button>
       </div>
       <hr>
-      <label>Sync Photos to NAS</label>
-      <div class="settings-row">
-        <input type="text" id="sync-source-input" placeholder="P:\Photos">
-        <button id="pick-source-btn" title="Browse">&#128193;</button>
-      </div>
-      <div class="settings-label-small">Source (local drive with recent photos)</div>
-      <div class="settings-row">
-        <input type="text" id="sync-dest-input" placeholder="\\NAS\Photos">
-        <button id="pick-dest-btn" title="Browse">&#128193;</button>
-      </div>
-      <div class="settings-label-small">Destination (NAS network share path)</div>
-      <div class="settings-row">
-        <button id="sync-save-btn">Save Paths</button>
-        <button id="sync-start-btn" class="sync-btn">&#9654; Sync Now</button>
-        <button id="sync-abort-btn" class="hidden">&#9646;&#9646; Stop</button>
-      </div>
-      <div id="sync-progress-bar-wrap" class="hidden">
-        <div id="sync-progress-bar"></div>
-      </div>
-      <div id="sync-status"></div>
-      <hr>
       <button id="close-settings-btn">Close</button>
     </div>
   </div>
@@ -90,8 +70,30 @@
     <div id="film-strip"></div>
   </div>
 
+  <!-- Sync panel -->
+  <div id="sync-panel" class="hidden">
+    <div id="sync-backdrop"></div>
+    <div id="sync-content">
+      <div id="sync-header">
+        <h2>&#8645; Sync Photos</h2>
+        <div id="sync-paths">P:\Photos &rarr; Z:\Photos</div>
+      </div>
+      <div id="sync-controls">
+        <button id="sync-start-btn" class="sync-action-btn">&#9654; Start Sync</button>
+        <button id="sync-abort-btn" class="sync-action-btn sync-abort hidden">&#9646;&#9646; Stop</button>
+        <button id="sync-close-btn" class="sync-close-btn">&#10005;</button>
+      </div>
+      <div id="sync-overall">
+        <div id="sync-overall-bar-wrap"><div id="sync-overall-bar"></div></div>
+        <div id="sync-summary"></div>
+      </div>
+      <div id="sync-log"></div>
+    </div>
+  </div>
+
   <script src="bridge.js"></script>
   <script src="app.js"></script>
   <script src="settings.js"></script>
+  <script src="sync.js"></script>
 </body>
 </html>
