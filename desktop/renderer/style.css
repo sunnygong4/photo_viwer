@@ -674,8 +674,12 @@ body.extreme-zoom .photo-cell { contain: strict; }
 .sync-day-btn:hover { background: #2e7d32; color: #fff; }
 .sync-ok { color: #4caf50; font-size: 13px; }
 .sync-ok-sm { color: #4caf50; font-size: 11px; }
-.sync-in-progress { color: #64b5f6; font-size: 11px; }
+.sync-in-progress { color: #64b5f6; font-size: 11px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; text-align: right; }
+.sync-filename { color: #42a5f5; font-family: monospace; font-size: 10px; opacity: 0.8; }
 .sync-error { color: #f44336; font-size: 12px; }
+.stat-na { color: #4caf50; font-style: italic; font-size: 12px; }
+#sync-table tr.row-na td { background: #0a160a; }
+#sync-table tr.row-na .col-month { color: #66bb6a; }
 
 /* --- Settings panel (desktop only) --- */
 

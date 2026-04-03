@@ -332,8 +332,8 @@ ipcMain.handle("sync-month", async (event, { month }) => {
     }
 
     send({ phase: "day-start", day, srcCount: srcStats.fileCount, srcSize: srcStats.sizeBytes, destCount: destStats.fileCount });
-    const { copied, errors } = await syncDirAsync(srcDay, destDay, () => syncAbort, () => {
-      send({ phase: "day-progress", day, copied: ++totalCopied });
+    const { copied, errors } = await syncDirAsync(srcDay, destDay, () => syncAbort, (filename) => {
+      send({ phase: "day-progress", day, copied: ++totalCopied, filename });
     });
     totalErrors += errors;
     send({ phase: "day-done", day, copied, errors });

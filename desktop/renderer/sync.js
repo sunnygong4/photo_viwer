@@ -61,25 +61,38 @@
     if (!entry || entry.syncing) return;
     const { monthTr, local, server } = entry;
 
-    monthTr.children[2].innerHTML = statCell(local, local ? null : "scanning…");
+    // Local cell — N/A (green) if month doesn't exist on P:\
+    if (local && local.notOnLocal) {
+      monthTr.children[2].innerHTML = `<span class="stat-na">N/A</span>`;
+    } else {
+      monthTr.children[2].innerHTML = statCell(local, local ? null : "scanning…");
+    }
     monthTr.children[3].innerHTML = statCell(server, server ? null : "loading…");
 
     // Row color
     monthTr.className = "month-row";
-    if (local && server) {
+    if (local && local.notOnLocal) {
+      monthTr.classList.add("row-na");
+    } else if (local && server) {
       if (isMatched(local, server)) monthTr.classList.add("row-matched");
       else if (local.fileCount > (server.fileCount || 0)) monthTr.classList.add("row-needs-sync");
     }
 
     // Action button
     const actionTd = monthTr.children[4];
-    if (local && local.fileCount > 0) {
+    if (local && local.notOnLocal) {
+      actionTd.innerHTML = ""; // no sync needed
+    } else if (local && local.fileCount > 0) {
       const matched = server && isMatched(local, server);
-      actionTd.innerHTML = matched
-        ? `<span class="sync-ok">✓</span>`
-        : `<button class="sync-month-btn" data-month="${name}">↑ Sync</button>`;
-      const btn = actionTd.querySelector(".sync-month-btn");
-      if (btn) btn.onclick = (e) => { e.stopPropagation(); startMonthSync(name); };
+      if (matched) {
+        actionTd.innerHTML = `<span class="sync-ok">✓</span>`;
+      } else {
+        const missing = server ? (local.fileCount - server.fileCount) : local.fileCount;
+        const label = missing > 0 ? `↑ ${missing} files` : "↑ Sync";
+        actionTd.innerHTML = `<button class="sync-month-btn" data-month="${name}">${label}</button>`;
+        const btn = actionTd.querySelector(".sync-month-btn");
+        if (btn) btn.onclick = (e) => { e.stopPropagation(); startMonthSync(name); };
+      }
     }
   }
 
@@ -191,11 +204,12 @@
     window.scloud.onMonthProgress((msg) => {
       if (msg.month !== month) return;
       if (msg.phase === "day-start") {
-        actionTd.innerHTML = `<span class="sync-in-progress">↑ ${msg.day}</span>`;
+        actionTd.innerHTML = `<span class="sync-in-progress">↑ ${msg.day} (${msg.srcCount - msg.destCount} new)</span>`;
       } else if (msg.phase === "day-skip") {
         actionTd.innerHTML = `<span class="sync-in-progress">✓ ${msg.day}</span>`;
       } else if (msg.phase === "day-progress") {
-        actionTd.innerHTML = `<span class="sync-in-progress">+${msg.copied}…</span>`;
+        const fname = msg.filename ? `<span class="sync-filename" title="${msg.filename}">${msg.filename}</span>` : "";
+        actionTd.innerHTML = `<span class="sync-in-progress">+${msg.copied} ${fname}</span>`;
       } else if (msg.phase === "done") {
         entry.syncing = false;
         // Update local stats from the refreshed scan returned by main process
@@ -291,8 +305,10 @@
 
   // ── Local full scan ────────────────────────────────────────────────
   async function startLocalScan() {
+    const scannedLocally = new Set();
     window.scloud.offScanProgress();
     window.scloud.onScanProgress((msg) => {
+      scannedLocally.add(msg.name);
       const entry = getOrCreateMonthRow(msg.name);
       entry.local = { sizeBytes: msg.sizeBytes, fileCount: msg.fileCount };
       updateMonthRow(msg.name);
@@ -300,9 +316,19 @@
     const result = await window.scloud.scanLocal();
     window.scloud.offScanProgress();
     if (!result.ok) { summaryEl.textContent = "Local scan error: " + result.error; return; }
+
+    // Any month the server knows about but not on P:\ → mark N/A (green)
+    for (const [name, entry] of months) {
+      if (!scannedLocally.has(name) && entry.local === null) {
+        entry.local = { sizeBytes: 0, fileCount: 0, notOnLocal: true };
+        updateMonthRow(name);
+      }
+    }
+
     let needsSync = 0;
     for (const [, entry] of months) {
-      if (entry.local && entry.server && !isMatched(entry.local, entry.server) && entry.local.fileCount > (entry.server.fileCount || 0)) needsSync++;
+      if (entry.local && !entry.local.notOnLocal && entry.server &&
+          !isMatched(entry.local, entry.server) && entry.local.fileCount > (entry.server.fileCount || 0)) needsSync++;
     }
     summaryEl.textContent = needsSync > 0
       ? `${needsSync} month${needsSync !== 1 ? "s" : ""} need syncing. Click a month row to see day breakdown.`
