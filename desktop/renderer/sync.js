@@ -1,208 +1,330 @@
-// Sync panel — compares P:\Photos (local) vs Z:\Photos (server)
+// Sync panel — P:\Photos vs Z:\Photos with expandable day breakdown
 (() => {
   if (!window.scloud) return;
 
-  const syncBtn  = document.getElementById("sync-btn");
-  const panel    = document.getElementById("sync-panel");
-  const backdrop = document.getElementById("sync-backdrop");
-  const closeBtn = document.getElementById("sync-close-btn");
+  const syncBtn   = document.getElementById("sync-btn");
+  const panel     = document.getElementById("sync-panel");
+  const backdrop  = document.getElementById("sync-backdrop");
+  const closeBtn  = document.getElementById("sync-close-btn");
   const tableBody = document.getElementById("sync-table-body");
   const summaryEl = document.getElementById("sync-summary");
 
-  // month name → { row el, local stats, server stats, syncBtn el }
-  const rows = new Map();
-  let serverStats = null; // { months: [{ name, sizeBytes, fileCount }] }
+  // month → { monthTr, local, server, expanded, dayRows: Map<dayName, {tr, local, server}> }
+  const months = new Map();
 
   function fmtSize(b) {
     if (!b) return "—";
-    if (b >= 1e9) return (b / 1e9).toFixed(1) + " GB";
+    if (b >= 1e9) return (b / 1e9).toFixed(2) + " GB";
     if (b >= 1e6) return (b / 1e6).toFixed(1) + " MB";
-    return (b / 1e3).toFixed(0) + " KB";
+    return Math.round(b / 1e3) + " KB";
   }
+  function fmtCount(n) { return n != null ? n.toLocaleString() + " files" : "—"; }
 
-  function fmtCount(n) { return n ? n.toLocaleString() + " files" : "—"; }
-
-  // Return true if local and server look matched (within 1% size, equal count)
   function isMatched(local, server) {
     if (!local || !server) return false;
     if (local.fileCount === 0) return true;
     if (local.fileCount !== server.fileCount) return false;
-    const diff = Math.abs(local.sizeBytes - server.sizeBytes);
-    return diff / local.sizeBytes < 0.01;
+    return Math.abs(local.sizeBytes - server.sizeBytes) / local.sizeBytes < 0.01;
   }
 
-  function getOrCreateRow(name) {
-    if (rows.has(name)) return rows.get(name);
+  function statCell(stats, loading) {
+    if (loading) return `<span class="stat-loading">${loading}</span>`;
+    if (!stats) return `<span class="stat-loading">—</span>`;
+    return `<span class="stat-size">${fmtSize(stats.sizeBytes)}</span><span class="stat-count">${fmtCount(stats.fileCount)}</span>`;
+  }
 
+  // ── Month rows ─────────────────────────────────────────────────────
+  function getOrCreateMonthRow(name) {
+    if (months.has(name)) return months.get(name);
     const tr = document.createElement("tr");
+    tr.className = "month-row";
+    tr.dataset.month = name;
     tr.innerHTML = `
+      <td class="col-toggle"><span class="toggle-icon">▶</span></td>
       <td class="col-month">${name}</td>
       <td class="col-local"><span class="stat-loading">scanning…</span></td>
       <td class="col-server"><span class="stat-loading">loading…</span></td>
       <td class="col-action"></td>`;
     tableBody.appendChild(tr);
 
-    const entry = { tr, local: null, server: null, syncing: false };
-    rows.set(name, entry);
+    const entry = { monthTr: tr, local: null, server: null, expanded: false, dayRows: new Map(), syncing: false };
+    months.set(name, entry);
+
+    tr.querySelector(".col-toggle, .col-month").addEventListener("click", () => toggleExpand(name));
+    tr.querySelector(".col-toggle").style.cursor = "pointer";
+    tr.querySelector(".col-month").style.cursor = "pointer";
     return entry;
   }
 
-  function updateRow(name) {
-    const entry = rows.get(name);
-    if (!entry) return;
-    const { tr, local, server, syncing } = entry;
+  function updateMonthRow(name) {
+    const entry = months.get(name);
+    if (!entry || entry.syncing) return;
+    const { monthTr, local, server } = entry;
 
-    const localTd  = tr.children[1];
-    const serverTd = tr.children[2];
-    const actionTd = tr.children[3];
+    monthTr.children[2].innerHTML = statCell(local, local ? null : "scanning…");
+    monthTr.children[3].innerHTML = statCell(server, server ? null : "loading…");
 
-    if (local) {
-      localTd.innerHTML = `<span class="stat-size">${fmtSize(local.sizeBytes)}</span><span class="stat-count">${fmtCount(local.fileCount)}</span>`;
-    }
-    if (server) {
-      serverTd.innerHTML = `<span class="stat-size">${fmtSize(server.sizeBytes)}</span><span class="stat-count">${fmtCount(server.fileCount)}</span>`;
-    }
-
-    // Row status
-    tr.className = "";
+    // Row color
+    monthTr.className = "month-row";
     if (local && server) {
-      if (isMatched(local, server)) {
-        tr.classList.add("row-matched");
-      } else if (local.fileCount > (server.fileCount || 0)) {
-        tr.classList.add("row-needs-sync");
-      }
+      if (isMatched(local, server)) monthTr.classList.add("row-matched");
+      else if (local.fileCount > (server.fileCount || 0)) monthTr.classList.add("row-needs-sync");
     }
 
     // Action button
-    if (!syncing && local && local.fileCount > 0) {
+    const actionTd = monthTr.children[4];
+    if (local && local.fileCount > 0) {
       const matched = server && isMatched(local, server);
       actionTd.innerHTML = matched
         ? `<span class="sync-ok">✓</span>`
         : `<button class="sync-month-btn" data-month="${name}">↑ Sync</button>`;
       const btn = actionTd.querySelector(".sync-month-btn");
-      if (btn) btn.onclick = () => startMonthSync(name);
+      if (btn) btn.onclick = (e) => { e.stopPropagation(); startMonthSync(name); };
     }
   }
 
-  function setRowSyncing(name, progressText) {
-    const entry = rows.get(name);
-    if (!entry) return;
-    entry.syncing = true;
-    const actionTd = entry.tr.children[3];
-    actionTd.innerHTML = `<span class="sync-in-progress">${progressText || "syncing…"}</span>`;
-    entry.tr.className = "row-syncing";
+  // ── Day rows ───────────────────────────────────────────────────────
+  function getOrCreateDayRow(monthName, dayName) {
+    const entry = months.get(monthName);
+    if (!entry) return null;
+    if (entry.dayRows.has(dayName)) return entry.dayRows.get(dayName);
+
+    const tr = document.createElement("tr");
+    tr.className = "day-row";
+    tr.dataset.month = monthName;
+    tr.dataset.day = dayName;
+    if (!entry.expanded) tr.classList.add("hidden");
+    tr.innerHTML = `
+      <td class="col-toggle"></td>
+      <td class="col-month day-name">└ ${dayName}</td>
+      <td class="col-local"><span class="stat-loading">…</span></td>
+      <td class="col-server"><span class="stat-loading">…</span></td>
+      <td class="col-action"></td>`;
+
+    // Insert after last existing day row for this month, or after month row
+    const siblings = [...entry.dayRows.values()];
+    const insertAfter = siblings.length > 0 ? siblings[siblings.length - 1].tr : entry.monthTr;
+    insertAfter.insertAdjacentElement("afterend", tr);
+
+    const dayEntry = { tr, local: null, server: null };
+    entry.dayRows.set(dayName, dayEntry);
+    return dayEntry;
   }
 
-  function setRowDone(name, copied, errors) {
-    const entry = rows.get(name);
+  function updateDayRow(monthName, dayName) {
+    const entry = months.get(monthName);
     if (!entry) return;
-    entry.syncing = false;
-    // Invalidate server stats for this month so it reloads
-    if (entry.server) entry.server = null;
-    const actionTd = entry.tr.children[3];
-    const serverTd = entry.tr.children[2];
-    actionTd.innerHTML = `<span class="sync-ok">✓ +${copied}</span>`;
-    serverTd.innerHTML = `<span class="stat-loading">refreshing…</span>`;
-    entry.tr.className = "row-matched";
-    // Re-fetch server stats to update the server column
-    fetchServerStats(true);
+    const dayEntry = entry.dayRows.get(dayName);
+    if (!dayEntry) return;
+    const { tr, local, server } = dayEntry;
+
+    tr.children[2].innerHTML = statCell(local, local ? null : "…");
+    tr.children[3].innerHTML = statCell(server, server ? null : "…");
+
+    tr.className = "day-row" + (entry.expanded ? "" : " hidden");
+    if (local && server) {
+      if (isMatched(local, server)) tr.classList.add("day-matched");
+      else if (local.fileCount > (server.fileCount || 0)) tr.classList.add("day-needs-sync");
+    }
+
+    const actionTd = tr.children[4];
+    if (local && local.fileCount > 0 && dayName !== "(root)") {
+      const matched = server && isMatched(local, server);
+      actionTd.innerHTML = matched
+        ? `<span class="sync-ok sync-ok-sm">✓</span>`
+        : `<button class="sync-day-btn">↑</button>`;
+      const btn = actionTd.querySelector(".sync-day-btn");
+      if (btn) btn.onclick = () => startDaySync(monthName, dayName);
+    }
   }
 
-  // ── Load server stats ──────────────────────────────────────────────
-  async function fetchServerStats(refresh) {
-    const qs = refresh ? "?refresh=1" : "";
+  // ── Expand / collapse ──────────────────────────────────────────────
+  function toggleExpand(name) {
+    const entry = months.get(name);
+    if (!entry) return;
+    entry.expanded = !entry.expanded;
+    const icon = entry.monthTr.querySelector(".toggle-icon");
+    if (icon) icon.textContent = entry.expanded ? "▼" : "▶";
+
+    // Show/hide existing day rows
+    for (const dayEntry of entry.dayRows.values()) {
+      dayEntry.tr.classList.toggle("hidden", !entry.expanded);
+    }
+
+    // If expanding for first time, load day data
+    if (entry.expanded && entry.dayRows.size === 0) {
+      loadDayData(name);
+    }
+  }
+
+  async function loadDayData(monthName) {
+    // Fetch server day stats
     try {
-      summaryEl.textContent = "Loading server stats…";
-      const res = await fetch(`/api/sync-stats${qs}`);
-      serverStats = await res.json();
-
-      // Note: first call may be slow (30 min cache miss = NAS walk)
-      const age = serverStats.generatedAt ? Math.round((Date.now() - serverStats.generatedAt) / 60000) : null;
-      summaryEl.textContent = age !== null ? `Server data (${age}m old) — local scan running…` : "Local scan running…";
-
-      for (const m of serverStats.months) {
-        const entry = getOrCreateRow(m.name);
-        entry.server = { sizeBytes: m.sizeBytes, fileCount: m.fileCount };
-        updateRow(m.name);
+      const res = await fetch(`/api/sync-stats/${monthName}`);
+      const data = await res.json();
+      for (const d of (data.days || [])) {
+        const dayEntry = getOrCreateDayRow(monthName, d.name);
+        if (dayEntry) { dayEntry.server = { sizeBytes: d.sizeBytes, fileCount: d.fileCount }; updateDayRow(monthName, d.name); }
       }
-    } catch (e) {
-      summaryEl.textContent = "Could not load server stats — is the server reachable?";
-    }
-  }
+    } catch {}
 
-  // ── Local scan via IPC ─────────────────────────────────────────────
-  async function startLocalScan() {
-    window.scloud.offScanProgress();
-    window.scloud.onScanProgress((msg) => {
-      const entry = getOrCreateRow(msg.name);
-      entry.local = { sizeBytes: msg.sizeBytes, fileCount: msg.fileCount };
-      updateRow(msg.name);
+    // Local day scan via IPC
+    window.scloud.offScanMonthProgress();
+    window.scloud.onScanMonthProgress((msg) => {
+      const dayEntry = getOrCreateDayRow(monthName, msg.name);
+      if (dayEntry) { dayEntry.local = { sizeBytes: msg.sizeBytes, fileCount: msg.fileCount }; updateDayRow(monthName, msg.name); }
     });
-    const result = await window.scloud.scanLocal();
-    if (!result.ok) {
-      summaryEl.textContent = "Local scan error: " + result.error;
-      return;
-    }
-    // Count mismatches
-    let needsSync = 0;
-    for (const [name, entry] of rows) {
-      if (entry.local && entry.server && !isMatched(entry.local, entry.server) && entry.local.fileCount > entry.server.fileCount) needsSync++;
-    }
-    summaryEl.textContent = needsSync > 0
-      ? `${needsSync} month${needsSync > 1 ? "s" : ""} need syncing.`
-      : "Everything looks synced!";
+    await window.scloud.scanLocalMonth(monthName);
+    window.scloud.offScanMonthProgress();
   }
 
-  // ── Per-month sync ─────────────────────────────────────────────────
+  // ── Month-level sync ───────────────────────────────────────────────
   async function startMonthSync(month) {
-    setRowSyncing(month, "starting…");
+    const entry = months.get(month);
+    if (!entry || entry.syncing) return;
+    entry.syncing = true;
+
+    const actionTd = entry.monthTr.children[4];
+    entry.monthTr.className = "month-row row-syncing";
+
     window.scloud.offMonthProgress();
     window.scloud.onMonthProgress((msg) => {
       if (msg.month !== month) return;
       if (msg.phase === "day-start") {
-        setRowSyncing(month, `copying ${msg.day}…`);
-      } else if (msg.phase === "day-progress") {
-        setRowSyncing(month, `+${msg.copied} files…`);
+        actionTd.innerHTML = `<span class="sync-in-progress">↑ ${msg.day}</span>`;
       } else if (msg.phase === "day-skip") {
-        setRowSyncing(month, `checking days…`);
+        actionTd.innerHTML = `<span class="sync-in-progress">✓ ${msg.day}</span>`;
+      } else if (msg.phase === "day-progress") {
+        actionTd.innerHTML = `<span class="sync-in-progress">+${msg.copied}…</span>`;
       } else if (msg.phase === "done") {
-        setRowDone(month, msg.totalCopied, msg.totalErrors);
+        entry.syncing = false;
+        // Update local stats from the refreshed scan returned by main process
+        if (msg.refreshedLocal) {
+          entry.local = msg.refreshedLocal;
+        }
+        // Clear server stats so next updateMonthRow shows "refreshing"
+        entry.server = null;
+        entry.monthTr.children[3].innerHTML = `<span class="stat-loading">refreshing…</span>`;
+        actionTd.innerHTML = `<span class="sync-ok">✓ +${msg.totalCopied}</span>`;
         window.scloud.offMonthProgress();
-        // Re-scan local for this month to update count
-        window.scloud.scanLocal();
+        // Re-fetch server stats for this month only
+        refreshMonthServerStats(month);
+        // If expanded, reload day data
+        if (entry.expanded) {
+          entry.dayRows.clear();
+          loadDayData(month);
+        }
       } else if (msg.phase === "aborted") {
-        const entry = rows.get(month);
-        if (entry) { entry.syncing = false; updateRow(month); }
+        entry.syncing = false;
+        updateMonthRow(month);
         window.scloud.offMonthProgress();
       }
     });
+
     const result = await window.scloud.syncMonth(month);
     if (!result.ok) {
-      const entry = rows.get(month);
-      if (entry) {
-        entry.syncing = false;
-        entry.tr.children[3].innerHTML = `<span class="sync-error">Error</span>`;
-      }
+      entry.syncing = false;
+      actionTd.innerHTML = `<span class="sync-error">${result.error}</span>`;
     }
   }
 
-  // ── Open / close panel ─────────────────────────────────────────────
+  async function refreshMonthServerStats(month) {
+    try {
+      const res = await fetch(`/api/sync-stats/${month}?refresh=1`);
+      const data = await res.json();
+      // Sum day stats to get month total
+      let sizeBytes = 0, fileCount = 0;
+      for (const d of (data.days || [])) { sizeBytes += d.sizeBytes; fileCount += d.fileCount; }
+      const entry = months.get(month);
+      if (entry) { entry.server = { sizeBytes, fileCount }; updateMonthRow(month); }
+    } catch {}
+  }
+
+  // ── Day-level sync ─────────────────────────────────────────────────
+  async function startDaySync(month, day) {
+    const entry = months.get(month);
+    const dayEntry = entry?.dayRows.get(day);
+    if (!dayEntry) return;
+
+    dayEntry.tr.children[4].innerHTML = `<span class="sync-in-progress">copying…</span>`;
+    dayEntry.tr.className = "day-row day-syncing";
+
+    window.scloud.offDayProgress();
+    window.scloud.onDayProgress((msg) => {
+      if (msg.month !== month || msg.day !== day) return;
+      if (msg.phase === "progress") {
+        dayEntry.tr.children[4].innerHTML = `<span class="sync-in-progress">+${msg.copied}</span>`;
+      } else if (msg.phase === "done") {
+        dayEntry.tr.children[4].innerHTML = `<span class="sync-ok sync-ok-sm">✓ +${msg.copied}</span>`;
+        dayEntry.tr.className = "day-row day-matched";
+        window.scloud.offDayProgress();
+        // Refresh day server stats
+        fetch(`/api/sync-stats/${month}?refresh=1`).then(r => r.json()).then(data => {
+          const d = data.days?.find(d => d.name === day);
+          if (d) { dayEntry.server = { sizeBytes: d.sizeBytes, fileCount: d.fileCount }; updateDayRow(month, day); }
+          // Also update month total
+          refreshMonthServerStats(month);
+        }).catch(() => {});
+      }
+    });
+
+    await window.scloud.syncDay(month, day);
+  }
+
+  // ── Server stats (full) ────────────────────────────────────────────
+  async function fetchServerStats() {
+    try {
+      summaryEl.textContent = "Loading server stats… (may take a moment on first load)";
+      const res = await fetch("/api/sync-stats");
+      const data = await res.json();
+      const age = data.generatedAt ? Math.round((Date.now() - data.generatedAt) / 60000) : 0;
+      summaryEl.textContent = `Server data (${age}m old) — local scan running…`;
+      for (const m of (data.months || [])) {
+        const entry = getOrCreateMonthRow(m.name);
+        entry.server = { sizeBytes: m.sizeBytes, fileCount: m.fileCount };
+        updateMonthRow(m.name);
+      }
+    } catch {
+      summaryEl.textContent = "Could not reach server.";
+    }
+  }
+
+  // ── Local full scan ────────────────────────────────────────────────
+  async function startLocalScan() {
+    window.scloud.offScanProgress();
+    window.scloud.onScanProgress((msg) => {
+      const entry = getOrCreateMonthRow(msg.name);
+      entry.local = { sizeBytes: msg.sizeBytes, fileCount: msg.fileCount };
+      updateMonthRow(msg.name);
+    });
+    const result = await window.scloud.scanLocal();
+    window.scloud.offScanProgress();
+    if (!result.ok) { summaryEl.textContent = "Local scan error: " + result.error; return; }
+    let needsSync = 0;
+    for (const [, entry] of months) {
+      if (entry.local && entry.server && !isMatched(entry.local, entry.server) && entry.local.fileCount > (entry.server.fileCount || 0)) needsSync++;
+    }
+    summaryEl.textContent = needsSync > 0
+      ? `${needsSync} month${needsSync !== 1 ? "s" : ""} need syncing. Click a month row to see day breakdown.`
+      : "All months synced! Click a month to inspect days.";
+  }
+
+  // ── Open / close ───────────────────────────────────────────────────
   function openPanel() {
     panel.classList.remove("hidden");
     tableBody.innerHTML = "";
-    rows.clear();
-    serverStats = null;
+    months.clear();
     summaryEl.textContent = "Loading…";
-    summaryEl.style.color = "";
-    // Kick off both in parallel
-    fetchServerStats(false);
+    fetchServerStats();
     startLocalScan();
   }
 
   function closePanel() {
     panel.classList.add("hidden");
     window.scloud.offScanProgress();
+    window.scloud.offScanMonthProgress();
     window.scloud.offMonthProgress();
+    window.scloud.offDayProgress();
   }
 
   syncBtn.onclick = openPanel;

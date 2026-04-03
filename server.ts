@@ -207,9 +207,50 @@ app.get("/api/sync-stats", async (req, res) => {
   }
 });
 
-// Invalidate sync stats cache after any new upload/sync would happen
-// (called internally when needed)
-function invalidateSyncStats() { syncStatsCache = null; }
+// Per-month day-level stats — cached per month for 30 minutes
+const syncMonthCache = new Map<string, { data: any; timestamp: number }>();
+
+app.get("/api/sync-stats/:month", async (req, res) => {
+  const { month } = req.params;
+  if (!safePath(month)) return res.status(400).json({ error: "Invalid path" });
+
+  if (req.query.refresh) syncMonthCache.delete(month);
+  const cached = syncMonthCache.get(month);
+  if (cached && Date.now() - cached.timestamp < SYNC_STATS_TTL) {
+    return res.json(cached.data);
+  }
+
+  const monthPath = path.join(PHOTOS_ROOT, month);
+  try {
+    const entries = await fs.readdir(monthPath, { withFileTypes: true });
+    const days: any[] = [];
+
+    // Day subfolders
+    const dayDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name).sort().reverse();
+    for (const dayName of dayDirs) {
+      const { sizeBytes, fileCount } = await getMonthSizeAsync(path.join(monthPath, dayName));
+      days.push({ name: dayName, sizeBytes, fileCount });
+    }
+
+    // Loose files at month root (no day subfolder)
+    const looseFiles = entries.filter(
+      (e) => e.isFile() && SYNC_EXTS_SET.has(path.extname(e.name).toLowerCase())
+    );
+    if (looseFiles.length > 0) {
+      let sizeBytes = 0;
+      for (const f of looseFiles) {
+        try { sizeBytes += (await fs.stat(path.join(monthPath, f.name))).size; } catch {}
+      }
+      days.push({ name: "(root)", sizeBytes, fileCount: looseFiles.length });
+    }
+
+    const data = { month, days, generatedAt: Date.now() };
+    syncMonthCache.set(month, { data, timestamp: Date.now() });
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // GET /api/folders - list top-level folders (months + Film.x)
 app.get("/api/folders", async (_req, res) => {

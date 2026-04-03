@@ -221,6 +221,57 @@ async function syncDirAsync(srcDir, destDir, abortCheck, onProgress) {
   return { copied, errors };
 }
 
+// IPC: scan one month's day subfolders locally, emitting per-day stats
+ipcMain.handle("scan-local-month", async (event, { month }) => {
+  const send = (msg) => { try { event.sender.send("scan-local-month-progress", msg); } catch {} };
+  const monthPath = path.join(SYNC_SRC, month);
+  let entries;
+  try { entries = await fsP.readdir(monthPath, { withFileTypes: true }); }
+  catch (err) { return { ok: false, error: err.message }; }
+
+  const dayDirs = entries.filter(e => e.isDirectory()).map(e => e.name).sort().reverse();
+  const looseFiles = entries.filter(e => e.isFile() && SYNC_EXTS.has(path.extname(e.name).toLowerCase()));
+
+  for (const day of dayDirs) {
+    const { sizeBytes, fileCount } = await getDirStats(path.join(monthPath, day));
+    send({ name: day, sizeBytes, fileCount });
+  }
+  if (looseFiles.length > 0) {
+    let sizeBytes = 0;
+    for (const f of looseFiles) {
+      try { sizeBytes += (await fsP.stat(path.join(monthPath, f.name))).size; } catch {}
+    }
+    send({ name: "(root)", sizeBytes, fileCount: looseFiles.length });
+  }
+  return { ok: true };
+});
+
+// IPC: sync a single day folder
+ipcMain.handle("sync-day", async (event, { month, day }) => {
+  const srcDay  = path.join(SYNC_SRC,  month, day);
+  const destDay = path.join(SYNC_DEST, month, day);
+  const send = (msg) => { try { event.sender.send("sync-day-progress", { month, day, ...msg }); } catch {} };
+
+  syncAbort = false;
+  let copied = 0, errors = 0;
+
+  // Check sizes first
+  const [srcStats, destStats] = await Promise.all([
+    getDirStats(srcDay),
+    getDirStats(destDay).catch(() => ({ sizeBytes: 0, fileCount: 0 })),
+  ]);
+
+  send({ phase: "start", srcCount: srcStats.fileCount, destCount: destStats.fileCount });
+
+  const result = await syncDirAsync(srcDay, destDay, () => syncAbort, (filename) => {
+    send({ phase: "progress", copied: ++copied, filename });
+  });
+  copied = result.copied; errors = result.errors;
+
+  send({ phase: "done", copied, errors });
+  return { ok: true, copied, errors };
+});
+
 // IPC: scan local P:\Photos month-by-month, emitting stats per month
 // Non-blocking — each month awaits async I/O
 ipcMain.handle("scan-local", async (event) => {
@@ -304,7 +355,9 @@ ipcMain.handle("sync-month", async (event, { month }) => {
     }
   }
 
-  send({ phase: "done", totalCopied, totalErrors });
+  // Re-scan local month stats after sync
+  const refreshed = await getDirStats(srcMonth);
+  send({ phase: "done", totalCopied, totalErrors, refreshedLocal: refreshed });
   return { ok: true, totalCopied, totalErrors };
 });
 
