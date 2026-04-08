@@ -49,8 +49,11 @@ function isJpeg(filename: string): boolean {
 }
 
 // ── Authentication ────────────────────────────────────────────────────────────
-const AUTH_USERNAME = process.env.AUTH_USERNAME || "guest";
-const AUTH_PASSWORD = process.env.AUTH_PASSWORD || "2368693297";
+const AUTH_USERNAME   = process.env.AUTH_USERNAME   || "guest";
+const AUTH_PASSWORD   = process.env.AUTH_PASSWORD   || "2368693297";
+// Desktop app sends this header — bypasses the login page entirely.
+// Set DESKTOP_TOKEN in .env to override.
+const DESKTOP_TOKEN   = process.env.DESKTOP_TOKEN   || "scloud-desktop-v1-a9f3c2e8b7d4";
 const sessions = new Map<string, number>(); // token → expiry timestamp (ms)
 
 function parseCookies(header: string | undefined): Record<string, string> {
@@ -107,23 +110,16 @@ const LOGIN_PAGE = `<!DOCTYPE html>
 </html>`;
 
 function requireAuth(req: any, res: any, next: any) {
-  // Basic Auth — used by the desktop app
-  const authHeader = req.headers["authorization"] || "";
-  if (authHeader.startsWith("Basic ")) {
-    const decoded = Buffer.from(authHeader.slice(6), "base64").toString();
-    const colon = decoded.indexOf(":");
-    const u = decoded.slice(0, colon);
-    const p = decoded.slice(colon + 1);
-    if (u === AUTH_USERNAME && p === AUTH_PASSWORD) return next();
-  }
+  // Desktop app token — no credentials needed, just a shared secret header
+  if (req.headers["x-scloud-token"] === DESKTOP_TOKEN) return next();
 
-  // Session cookie — used by the browser
+  // Session cookie — browser users (after login form)
   const cookies = parseCookies(req.headers["cookie"]);
-  const token = cookies["scloud_session"];
-  const expiry = token ? sessions.get(token) : undefined;
+  const sessionToken = cookies["scloud_session"];
+  const expiry = sessionToken ? sessions.get(sessionToken) : undefined;
   if (expiry && expiry > Date.now()) return next();
 
-  // Unauthenticated: API → 401, everything else → /login
+  // Unauthenticated: API → 401, everything else → /login page
   if (req.path.startsWith("/api/")) {
     return res.status(401).json({ error: "Unauthorized" });
   }
