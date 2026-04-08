@@ -4,6 +4,7 @@ import fs from "fs/promises";
 import { createReadStream } from "fs";
 import sharp from "sharp";
 import { fileURLToPath } from "url";
+import crypto from "crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PHOTOS_ROOT = process.env.PHOTOS_ROOT || "Z:/Photos";
@@ -47,6 +48,90 @@ function isJpeg(filename: string): boolean {
   return JPEG_EXTS.has(path.extname(filename).toLowerCase());
 }
 
+// ── Authentication ────────────────────────────────────────────────────────────
+const AUTH_USERNAME = process.env.AUTH_USERNAME || "guest";
+const AUTH_PASSWORD = process.env.AUTH_PASSWORD || "2368693297";
+const sessions = new Map<string, number>(); // token → expiry timestamp (ms)
+
+function parseCookies(header: string | undefined): Record<string, string> {
+  if (!header) return {};
+  const out: Record<string, string> = {};
+  for (const part of header.split(";")) {
+    const idx = part.indexOf("=");
+    if (idx < 0) continue;
+    out[part.slice(0, idx).trim()] = decodeURIComponent(part.slice(idx + 1).trim());
+  }
+  return out;
+}
+
+const LOGIN_PAGE = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>sCloud · Sign In</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #111; color: #ddd; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+           display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .card { background: #1a1a1a; border: 1px solid #333; border-radius: 14px; padding: 40px 44px;
+            width: 100%; max-width: 380px; box-shadow: 0 8px 40px rgba(0,0,0,0.5); }
+    h1 { font-size: 22px; font-weight: 700; color: #fff; margin-bottom: 6px; }
+    .sub { font-size: 13px; color: #666; margin-bottom: 28px; }
+    label { display: block; font-size: 12px; color: #888; text-transform: uppercase;
+            letter-spacing: 0.4px; margin-bottom: 5px; margin-top: 16px; }
+    input { width: 100%; background: #0e0e0e; border: 1px solid #333; border-radius: 8px;
+            color: #fff; padding: 10px 14px; font-size: 15px; font-family: inherit; }
+    input:focus { outline: none; border-color: #5090d0; background: #111; }
+    .error { color: #f44336; font-size: 13px; margin-top: 14px; text-align: center; }
+    button { width: 100%; margin-top: 24px; padding: 12px; background: #1a56c4;
+             border: none; border-radius: 8px; color: #fff; font-size: 15px;
+             font-weight: 600; cursor: pointer; }
+    button:hover { background: #1d65e8; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>&#9729; sCloud</h1>
+    <p class="sub">Sign in to view your photos</p>
+    <form method="POST" action="/login">
+      <label>Username</label>
+      <input type="text" name="username" autocomplete="username" autofocus>
+      <label>Password</label>
+      <input type="password" name="password" autocomplete="current-password">
+      __ERROR__
+      <button type="submit">Sign In</button>
+    </form>
+  </div>
+</body>
+</html>`;
+
+function requireAuth(req: any, res: any, next: any) {
+  // Basic Auth — used by the desktop app
+  const authHeader = req.headers["authorization"] || "";
+  if (authHeader.startsWith("Basic ")) {
+    const decoded = Buffer.from(authHeader.slice(6), "base64").toString();
+    const colon = decoded.indexOf(":");
+    const u = decoded.slice(0, colon);
+    const p = decoded.slice(colon + 1);
+    if (u === AUTH_USERNAME && p === AUTH_PASSWORD) return next();
+  }
+
+  // Session cookie — used by the browser
+  const cookies = parseCookies(req.headers["cookie"]);
+  const token = cookies["scloud_session"];
+  const expiry = token ? sessions.get(token) : undefined;
+  if (expiry && expiry > Date.now()) return next();
+
+  // Unauthenticated: API → 401, everything else → /login
+  if (req.path.startsWith("/api/")) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  res.redirect("/login");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 const app = express();
 
 // CORS for desktop app
@@ -54,6 +139,38 @@ app.use((_req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   next();
 });
+
+// Parse form bodies (for login POST)
+app.use(express.urlencoded({ extended: false }));
+
+// Login page
+app.get("/login", (_req, res) => {
+  res.send(LOGIN_PAGE.replace("__ERROR__", ""));
+});
+
+app.post("/login", (req: any, res: any) => {
+  const { username, password } = req.body;
+  if (username === AUTH_USERNAME && password === AUTH_PASSWORD) {
+    const token = crypto.randomBytes(32).toString("hex");
+    const maxAge = 30 * 24 * 3600; // 30 days
+    sessions.set(token, Date.now() + maxAge * 1000);
+    res.setHeader("Set-Cookie",
+      `scloud_session=${token}; HttpOnly; Path=/; Max-Age=${maxAge}; SameSite=Lax`);
+    return res.redirect("/");
+  }
+  res.send(LOGIN_PAGE.replace("__ERROR__",
+    '<p class="error">Invalid username or password.</p>'));
+});
+
+app.get("/logout", (req: any, res: any) => {
+  const token = parseCookies(req.headers["cookie"])["scloud_session"];
+  if (token) sessions.delete(token);
+  res.setHeader("Set-Cookie", "scloud_session=; HttpOnly; Path=/; Max-Age=0");
+  res.redirect("/login");
+});
+
+// All routes below this line require authentication
+app.use(requireAuth);
 
 // Parse thumbnail size/quality from query params
 function parseThumbParams(query: any) {
