@@ -110,8 +110,9 @@ const LOGIN_PAGE = `<!DOCTYPE html>
 </html>`;
 
 function requireAuth(req: any, res: any, next: any) {
-  // Desktop app token — no credentials needed, just a shared secret header
+  // Desktop app — token via header (API calls) or query param (direct img src)
   if (req.headers["x-scloud-token"] === DESKTOP_TOKEN) return next();
+  if (req.query._t === DESKTOP_TOKEN) return next();
 
   // Session cookie — browser users (after login form)
   const cookies = parseCookies(req.headers["cookie"]);
