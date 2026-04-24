@@ -580,8 +580,6 @@ async function openWithPhotoSwipe(index) {
 
   const items = currentFiles.map(f => ({
     src: lbPhotoUrl(f),
-    width: 3000,
-    height: 2000,
     alt: f,
   }));
 
