@@ -41,7 +41,14 @@
     return `scloud-thumb://thumb/${pathPart}${qsPart}`;
   };
 
-  // Provide a function to get full photo URL from server
+  // Synchronous version — used by PhotoSwipe data source (must be sync)
+  const DESKTOP_TOKEN = "scloud-desktop-v1-a9f3c2e8b7d4";
+  window.__SCLOUD_PHOTO_URL_SYNC = function (apiPath) {
+    const sep = apiPath.includes("?") ? "&" : "?";
+    return `${config.serverUrl}${apiPath}${sep}_t=${DESKTOP_TOKEN}`;
+  };
+
+  // Async version (legacy, kept for compatibility)
   window.__SCLOUD_PHOTO_URL = async function (apiPath) {
     return await window.scloud.photoUrl(apiPath);
   };

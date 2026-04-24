@@ -10,8 +10,8 @@ let currentFiles = [];
 let lightboxIndex = -1;
 let currentMonth = "";
 let currentDay = "";
-let zoomed = false;
-let dragState = { dragging: false, startX: 0, startY: 0, scrollX: 0, scrollY: 0 };
+let pswpOpen = false;
+let pswpInstance = null;
 let currentThumbTier = null;
 
 // Gallery state
@@ -22,18 +22,15 @@ const sectionElements = new Map(); // section key -> { grid, month, day }
 
 // DOM refs
 const gallery = document.getElementById("gallery");
-const lightbox = document.getElementById("lightbox");
-const lightboxImg = document.getElementById("lightbox-img");
-const lightboxInfo = document.getElementById("lightbox-info");
-const lightboxSpinner = document.getElementById("lightbox-spinner");
 const filmStrip = document.getElementById("film-strip");
+const metaPanel = document.getElementById("meta-panel");
+const metaContent = document.getElementById("meta-content");
 const zoomSlider = document.getElementById("zoom-slider");
 const photoCount = document.getElementById("photo-count");
 const scrollIndicator = document.getElementById("scroll-indicator");
 const timelineNav = document.getElementById("timeline-nav");
 const timelineContent = document.getElementById("timeline-content");
 const timelineBackdrop = document.getElementById("timeline-backdrop");
-const imgContainer = document.getElementById("lightbox-img-container");
 
 // ===========================================
 // Initialization
@@ -412,7 +409,7 @@ function reloadVisibleSections() {
 // Ctrl+scroll to zoom
 document.addEventListener("wheel", (e) => {
   if (!e.ctrlKey) return;
-  if (!lightbox.classList.contains("hidden")) return;
+  if (pswpOpen) return;
   e.preventDefault();
   const current = parseInt(zoomSlider.value);
   const step = current < 70 ? 2 : 1; // finer steps in extreme range
@@ -538,77 +535,112 @@ function updateScrollIndicator() {
 }
 
 // ===========================================
-// URL helpers
+// PhotoSwipe — lazy-load ESM
 // ===========================================
 
-function thumbUrl(filename) {
-  const qs = thumbQueryString();
-  if (currentDay) return API_BASE + `/api/thumb/${currentMonth}/${currentDay}/${filename}${qs}`;
-  return API_BASE + `/api/thumb/${currentMonth}/${filename}${qs}`;
+let metaCache = new Map();
+
+async function getPhotoSwipe() {
+  if (window.__PhotoSwipeClass) return window.__PhotoSwipeClass;
+  const mod = await import("./vendor/photoswipe.esm.min.js");
+  window.__PhotoSwipeClass = mod.default;
+  return window.__PhotoSwipeClass;
 }
 
-function photoUrl(filename) {
+// ===========================================
+// Lightbox URL helpers
+// ===========================================
+
+function lbThumbUrl(filename) {
+  if (currentDay) return API_BASE + `/api/thumb/${currentMonth}/${currentDay}/${filename}`;
+  return API_BASE + `/api/thumb/${currentMonth}/${filename}`;
+}
+
+function lbPhotoUrl(filename) {
   if (currentDay) return API_BASE + `/api/photo/${currentMonth}/${currentDay}/${filename}`;
   return API_BASE + `/api/photo/${currentMonth}/${filename}`;
 }
 
 // ===========================================
-// Lightbox
+// Open with PhotoSwipe
 // ===========================================
 
-function openLightboxFromGrid(month, day, files, index) {
+async function openLightboxFromGrid(month, day, files, index) {
   currentMonth = month;
   currentDay = day || "";
   currentFiles = files;
-  openLightbox(index);
-}
-
-function openLightbox(index) {
   lightboxIndex = index;
-  lightbox.classList.remove("hidden");
-  resetZoom();
-  loadLightboxImage(index);
-  buildFilmStrip();
-  document.body.style.overflow = "hidden";
+  await openWithPhotoSwipe(index);
 }
 
-function closeLightbox() {
-  lightbox.classList.add("hidden");
-  lightboxImg.src = "";
-  resetZoom();
-  closeMetaPanel();
-  document.body.style.overflow = "";
-}
+async function openWithPhotoSwipe(index) {
+  if (pswpInstance) { pswpInstance.destroy(); pswpInstance = null; }
 
-function loadLightboxImage(index) {
-  const filename = currentFiles[index];
-  lightboxSpinner.classList.remove("hidden");
-  lightboxImg.style.opacity = "0";
-  resetZoom();
-  closeMetaPanel();
+  const PhotoSwipe = await getPhotoSwipe();
 
-  lightboxImg.onload = () => {
-    lightboxSpinner.classList.add("hidden");
-    lightboxImg.style.opacity = "1";
-  };
+  const items = currentFiles.map(f => ({
+    src: lbPhotoUrl(f),
+    width: 3000,
+    height: 2000,
+    alt: f,
+  }));
 
-  lightboxImg.src = photoUrl(filename);
-  lightboxInfo.textContent = `${filename}  (${index + 1} / ${currentFiles.length})`;
-  updateFilmStripHighlight();
-}
+  pswpInstance = new PhotoSwipe({
+    dataSource: items,
+    index,
+    bgOpacity: 0.92,
+    history: false,
+    zoom: true,
+    close: true,
+    counter: true,
+    arrowKeys: true,
+    wheelToZoom: true,
+    initialZoomLevel: "fit",
+    secondaryZoomLevel: 2,
+    maxZoomLevel: 8,
+    padding: { top: 0, bottom: 90, left: 0, right: 0 },
+  });
 
-function lightboxPrev() {
-  if (lightboxIndex > 0) {
-    lightboxIndex--;
-    loadLightboxImage(lightboxIndex);
-  }
-}
+  // Add ℹ info button to PhotoSwipe toolbar
+  pswpInstance.on("uiRegister", () => {
+    pswpInstance.ui.registerElement({
+      name: "info-button",
+      title: "Photo info",
+      order: 9,
+      isButton: true,
+      html: "&#9432;",
+      appendTo: "bar",
+      onClick: (e, el) => {
+        const isOpen = !metaPanel.classList.contains("hidden");
+        if (isOpen) closeMetaPanel(el);
+        else openMetaPanel(el);
+      },
+    });
+  });
 
-function lightboxNext() {
-  if (lightboxIndex < currentFiles.length - 1) {
-    lightboxIndex++;
-    loadLightboxImage(lightboxIndex);
-  }
+  pswpInstance.on("change", () => {
+    lightboxIndex = pswpInstance.currIndex;
+    updateFilmStripHighlight();
+    closeMetaPanel();
+  });
+
+  pswpInstance.on("afterInit", () => {
+    buildFilmStrip();
+    filmStrip.classList.remove("hidden");
+    pswpOpen = true;
+  });
+
+  pswpInstance.on("beforeClose", () => {
+    closeMetaPanel();
+    filmStrip.classList.add("hidden");
+  });
+
+  pswpInstance.on("destroy", () => {
+    pswpInstance = null;
+    pswpOpen = false;
+  });
+
+  pswpInstance.init();
 }
 
 // ===========================================
@@ -633,171 +665,50 @@ function buildFilmStrip() {
   for (let i = 0; i < currentFiles.length; i++) {
     const thumb = document.createElement("div");
     thumb.className = "film-thumb";
-    thumb.dataset.index = i;
 
     const img = document.createElement("img");
-    img.dataset.src = thumbUrl(currentFiles[i]);
+    img.dataset.src = lbThumbUrl(currentFiles[i]);
     img.alt = currentFiles[i];
 
     const idx = i;
-    thumb.onclick = (e) => {
-      e.stopPropagation();
+    thumb.onclick = () => {
       lightboxIndex = idx;
-      loadLightboxImage(idx);
+      if (pswpInstance) pswpInstance.goTo(idx);
     };
 
     thumb.appendChild(img);
     filmStrip.appendChild(thumb);
     observer.observe(img);
   }
-
   updateFilmStripHighlight();
 }
 
 function updateFilmStripHighlight() {
+  const idx = pswpInstance ? pswpInstance.currIndex : lightboxIndex;
   const thumbs = filmStrip.querySelectorAll(".film-thumb");
-  thumbs.forEach((t, i) => {
-    t.classList.toggle("active", i === lightboxIndex);
-  });
+  thumbs.forEach((t, i) => t.classList.toggle("active", i === idx));
   const active = filmStrip.querySelector(".film-thumb.active");
-  if (active) {
-    active.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
-  }
+  if (active) active.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
 }
-
-// ===========================================
-// Zoom & Drag (Lightbox) — scroll to zoom
-// ===========================================
-
-let zoomLevel = 1;
-const MIN_ZOOM = 1;
-const MAX_ZOOM = 8;
-
-let zoomBaseW = 0, zoomBaseH = 0;
-
-function resetZoom() {
-  zoomLevel = 1;
-  zoomed = false;
-  zoomBaseW = 0; zoomBaseH = 0;
-  lightboxImg.style.width = "";
-  lightboxImg.style.height = "";
-  lightboxImg.classList.remove("zoomed");
-  imgContainer.scrollLeft = 0;
-  imgContainer.scrollTop = 0;
-  imgContainer.classList.remove("zoomed");
-}
-
-function applyZoom(clientX, clientY, newZoom) {
-  newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newZoom));
-  if (newZoom <= 1.05) { resetZoom(); return; }
-
-  // Capture display size before first zoom
-  if (!zoomed) {
-    const r = lightboxImg.getBoundingClientRect();
-    zoomBaseW = r.width;
-    zoomBaseH = r.height;
-  }
-
-  const cr = imgContainer.getBoundingClientRect();
-  const contentX = imgContainer.scrollLeft + (clientX - cr.left);
-  const contentY = imgContainer.scrollTop + (clientY - cr.top);
-  const fracX = contentX / (zoomBaseW * zoomLevel);
-  const fracY = contentY / (zoomBaseH * zoomLevel);
-
-  zoomLevel = newZoom;
-  const newW = zoomBaseW * newZoom;
-  const newH = zoomBaseH * newZoom;
-
-  zoomed = true;
-  lightboxImg.classList.add("zoomed");
-  imgContainer.classList.add("zoomed");
-  // Set real pixel size — CSS transform doesn't affect layout so scroll won't work
-  lightboxImg.style.width  = newW + "px";
-  lightboxImg.style.height = newH + "px";
-
-  requestAnimationFrame(() => {
-    imgContainer.scrollLeft = fracX * newW - (clientX - cr.left);
-    imgContainer.scrollTop  = fracY * newH - (clientY - cr.top);
-  });
-}
-
-// Scroll wheel to zoom
-imgContainer.addEventListener("wheel", (e) => {
-  e.preventDefault();
-  e.stopPropagation();
-  const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-  applyZoom(e.clientX, e.clientY, zoomLevel * factor);
-}, { passive: false });
-
-// Double-click to toggle between 1x and 3x
-imgContainer.addEventListener("dblclick", (e) => {
-  e.preventDefault();
-  e.stopPropagation();
-  if (zoomed) {
-    resetZoom();
-  } else {
-    applyZoom(e.clientX, e.clientY, 3);
-  }
-});
-
-// Drag to pan when zoomed
-imgContainer.addEventListener("mousedown", (e) => {
-  if (!zoomed) return;
-  e.preventDefault();
-  dragState.dragging = true;
-  dragState.startX = e.clientX;
-  dragState.startY = e.clientY;
-  dragState.scrollX = imgContainer.scrollLeft;
-  dragState.scrollY = imgContainer.scrollTop;
-  imgContainer.style.cursor = "grabbing";
-});
-
-window.addEventListener("mousemove", (e) => {
-  if (!dragState.dragging) return;
-  imgContainer.scrollLeft = dragState.scrollX - (e.clientX - dragState.startX);
-  imgContainer.scrollTop = dragState.scrollY - (e.clientY - dragState.startY);
-});
-
-window.addEventListener("mouseup", () => {
-  if (!dragState.dragging) return;
-  dragState.dragging = false;
-  imgContainer.style.cursor = "";
-});
 
 // ===========================================
 // Metadata Panel
 // ===========================================
 
-const metaBtn = document.getElementById("lightbox-meta");
-const metaPanel = document.getElementById("meta-panel");
-const metaContent = document.getElementById("meta-content");
-let metaCache = new Map();
-
-metaBtn.onclick = (e) => {
-  e.stopPropagation();
-  const isOpen = !metaPanel.classList.contains("hidden");
-  if (isOpen) {
-    closeMetaPanel();
-  } else {
-    openMetaPanel();
-  }
-};
-
-function closeMetaPanel() {
+function closeMetaPanel(infoBtn) {
   metaPanel.classList.add("hidden");
-  metaBtn.classList.remove("active");
+  const btn = infoBtn || document.querySelector(".pswp__button--info-button");
+  if (btn) btn.style.color = "";
 }
 
-async function openMetaPanel() {
+async function openMetaPanel(infoBtn) {
   metaPanel.classList.remove("hidden");
-  metaBtn.classList.add("active");
+  if (infoBtn) infoBtn.style.color = "#8ab4f8";
+
   const filename = currentFiles[lightboxIndex];
   const key = `${currentMonth}/${currentDay ? currentDay + "/" : ""}${filename}`;
 
-  if (metaCache.has(key)) {
-    renderMeta(metaCache.get(key), filename);
-    return;
-  }
+  if (metaCache.has(key)) { renderMeta(metaCache.get(key), filename); return; }
 
   metaContent.innerHTML = '<span class="meta-label">Loading...</span>';
   try {
@@ -815,14 +726,11 @@ async function openMetaPanel() {
 
 function renderMeta(data, filename) {
   const rows = [];
-
   function row(label, value) {
     if (value !== undefined && value !== null && value !== "")
       rows.push(`<span class="meta-label">${label}</span><span class="meta-value">${value}</span>`);
   }
-  function divider() {
-    rows.push('<div class="meta-divider"></div>');
-  }
+  function divider() { rows.push('<div class="meta-divider"></div>'); }
 
   row("Filename", filename);
   row("Dimensions", data.width && data.height ? `${data.width} × ${data.height}` : null);
@@ -833,7 +741,6 @@ function renderMeta(data, filename) {
     row("Camera", [data.make, data.model].filter(Boolean).join(" "));
     row("Lens", data.lensModel || data.lensMake);
   }
-
   if (data.focalLength || data.fNumber || data.exposureTime || data.iso) {
     divider();
     row("Focal Length", data.focalLength);
@@ -842,7 +749,6 @@ function renderMeta(data, filename) {
     row("Shutter", data.exposureTime ? `${data.exposureTime}s` : null);
     row("ISO", data.iso);
   }
-
   if (data.exposureProgram || data.meteringMode || data.flash || data.exposureBias) {
     divider();
     row("Mode", data.exposureProgram);
@@ -850,7 +756,6 @@ function renderMeta(data, filename) {
     row("Flash", data.flash);
     row("Exp. Comp.", data.exposureBias);
   }
-
   if (data.dateTimeOriginal) {
     divider();
     row("Date Taken", data.dateTimeOriginal);
@@ -858,37 +763,6 @@ function renderMeta(data, filename) {
 
   metaContent.innerHTML = rows.join("\n");
 }
-
-// ===========================================
-// Lightbox Event Listeners
-// ===========================================
-
-document.getElementById("lightbox-backdrop").onclick = closeLightbox;
-document.getElementById("lightbox-close").onclick = closeLightbox;
-document.getElementById("lightbox-prev").onclick = (e) => {
-  e.stopPropagation();
-  lightboxPrev();
-};
-document.getElementById("lightbox-next").onclick = (e) => {
-  e.stopPropagation();
-  lightboxNext();
-};
-
-document.addEventListener("keydown", (e) => {
-  if (lightbox.classList.contains("hidden")) return;
-  switch (e.key) {
-    case "Escape":
-      if (zoomed) resetZoom();
-      else closeLightbox();
-      break;
-    case "ArrowLeft":
-      lightboxPrev();
-      break;
-    case "ArrowRight":
-      lightboxNext();
-      break;
-  }
-});
 
 // ===========================================
 // Start

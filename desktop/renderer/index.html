@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob: https: scloud-thumb:; style-src 'self' 'unsafe-inline';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; img-src 'self' data: blob: https: scloud-thumb:; style-src 'self' 'unsafe-inline';">
   <title>sCloud</title>
+  <link rel="stylesheet" href="./vendor/photoswipe.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -109,22 +110,12 @@
     </div>
   </div>
 
-  <!-- Lightbox -->
-  <div id="lightbox" class="hidden">
-    <div id="lightbox-backdrop"></div>
-    <div id="lightbox-img-container">
-      <img id="lightbox-img" src="">
-    </div>
-    <div id="lightbox-spinner" class="spinner hidden"></div>
-    <button id="lightbox-close">&times;</button>
-    <button id="lightbox-prev">&lsaquo;</button>
-    <button id="lightbox-next">&rsaquo;</button>
-    <div id="lightbox-info"></div>
-    <button id="lightbox-meta" title="Photo Info">&#9432;</button>
-    <div id="meta-panel" class="hidden">
-      <div id="meta-content"></div>
-    </div>
-    <div id="film-strip"></div>
+  <!-- Film strip overlay (shown when PhotoSwipe lightbox is open) -->
+  <div id="film-strip" class="hidden"></div>
+
+  <!-- Metadata panel overlay -->
+  <div id="meta-panel" class="hidden">
+    <div id="meta-content"></div>
   </div>
 
   <!-- Sync panel -->
