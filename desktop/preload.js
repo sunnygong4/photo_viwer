@@ -9,12 +9,18 @@ contextBridge.exposeInMainWorld("scloud", {
   apiFetch: (path) => ipcRenderer.invoke("api-fetch", path),
   thumbFetch: (path) => ipcRenderer.invoke("thumb-fetch", path),
   photoUrl: (path) => ipcRenderer.invoke("photo-url", path),
+  // SSH config
+  getSshConfig: () => ipcRenderer.invoke("get-ssh-config"),
+  setSshConfig: (cfg) => ipcRenderer.invoke("set-ssh-config", cfg),
+  testSsh: () => ipcRenderer.invoke("test-ssh"),
   // Sync
   scanLocal: () => ipcRenderer.invoke("scan-local"),
   scanLocalMonth: (month) => ipcRenderer.invoke("scan-local-month", { month }),
   syncMonth: (month) => ipcRenderer.invoke("sync-month", { month }),
   syncDay: (month, day) => ipcRenderer.invoke("sync-day", { month, day }),
   abortSync: () => ipcRenderer.invoke("abort-sync"),
+  findServerExtras: (month) => ipcRenderer.invoke("find-server-extras", { month }),
+  deleteServerExtras: (remotePaths) => ipcRenderer.invoke("delete-server-extras", { remotePaths }),
   onScanProgress: (cb) => ipcRenderer.on("scan-local-progress", (_e, msg) => cb(msg)),
   offScanProgress: () => ipcRenderer.removeAllListeners("scan-local-progress"),
   onScanMonthProgress: (cb) => ipcRenderer.on("scan-local-month-progress", (_e, msg) => cb(msg)),

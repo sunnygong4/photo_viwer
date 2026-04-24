@@ -277,9 +277,7 @@ body {
   position: fixed;
   inset: 0;
   z-index: 100;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  /* no flex — all children are position:absolute, flex was causing misalignment */
 }
 
 #lightbox.hidden {
@@ -292,15 +290,13 @@ body {
   background: rgba(0, 0, 0, 0.92);
 }
 
+/* Fills full viewport minus film strip at bottom */
 #lightbox-img-container {
-  position: relative;
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  bottom: 88px;
   z-index: 1;
-  max-width: 95vw;
-  max-height: calc(95vh - 90px);
   overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   cursor: default;
 }
 
@@ -308,26 +304,33 @@ body {
   overflow: auto;
   cursor: grab;
 }
-
-#lightbox-img-container.zoomed:active {
-  cursor: grabbing;
-}
+#lightbox-img-container.zoomed:active { cursor: grabbing; }
 
 #lightbox-img-container::-webkit-scrollbar { display: none; }
 #lightbox-img-container { scrollbar-width: none; }
 
+/* Centered in the container using absolute + translate trick */
 #lightbox-img {
-  max-width: 95vw;
-  max-height: calc(95vh - 90px);
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
   object-fit: contain;
   transition: opacity 0.2s;
   user-select: none;
   -webkit-user-drag: none;
 }
 
+/* When zoomed: JS sets explicit px dimensions, so drop the centering transform */
 #lightbox-img.zoomed {
-  max-width: 95vw;
-  max-height: calc(95vh - 90px);
+  position: static;
+  transform: none;
+  max-width: none;
+  max-height: none;
   cursor: grab;
 }
 
@@ -678,6 +681,58 @@ body.extreme-zoom .photo-cell { contain: strict; }
 .sync-filename { color: #42a5f5; font-family: monospace; font-size: 10px; opacity: 0.8; }
 .sync-error { color: #f44336; font-size: 12px; }
 .stat-na { color: #4caf50; font-style: italic; font-size: 12px; }
+
+/* ── Clean server button ── */
+.sync-clean-btn {
+  background: #3e1a1a;
+  border: 1px solid #7b3030;
+  border-radius: 6px;
+  color: #ff8a65;
+  font-size: 11px;
+  padding: 4px 8px;
+  cursor: pointer;
+  margin-left: 4px;
+}
+.sync-clean-btn:hover { background: #5a2020; border-color: #ef5350; }
+
+/* ── Server cleanup confirmation modal ── */
+.clean-modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.75);
+  display: flex; align-items: center; justify-content: center; z-index: 9999;
+}
+.clean-modal {
+  background: #1e1e1e; border: 1px solid #444; border-radius: 10px;
+  padding: 24px; max-width: 520px; width: 90%; box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+}
+.clean-modal h3 { margin: 0 0 12px; font-size: 16px; color: #ff8a65; }
+.clean-modal p  { font-size: 13px; color: #ccc; margin: 6px 0; }
+.clean-modal-list {
+  max-height: 200px; overflow-y: auto; background: #111; border-radius: 6px;
+  padding: 8px; margin: 10px 0; border: 1px solid #333;
+}
+.clean-modal-file {
+  font-family: monospace; font-size: 11px; color: #ef9a9a;
+  padding: 2px 0; display: flex; justify-content: space-between;
+}
+.clean-modal-file span { color: #888; margin-left: 8px; white-space: nowrap; }
+.clean-modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
+.clean-cancel-btn  { background: #333; border: 1px solid #555; border-radius: 6px; color: #ccc; padding: 8px 18px; cursor: pointer; font-size: 13px; }
+.clean-confirm-btn { background: #7b3030; border: 1px solid #ef5350; border-radius: 6px; color: #fff; padding: 8px 18px; cursor: pointer; font-size: 13px; font-weight: 600; }
+.clean-cancel-btn:hover  { background: #444; }
+.clean-confirm-btn:hover { background: #b71c1c; }
+
+/* ── Sync progress panel (inline below month row) ── */
+.sync-progress-row td { padding: 0 !important; background: #050d1a; border-bottom: 1px solid #1a2a40; }
+.sync-progress-panel { padding: 8px 16px 10px; }
+.spp-bar-wrap { height: 4px; background: #1a2a40; border-radius: 2px; margin-bottom: 7px; }
+.spp-bar { height: 4px; background: linear-gradient(90deg, #1565c0, #42a5f5); border-radius: 2px; width: 0%; transition: width 0.4s ease; }
+.spp-details { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+.spp-day   { color: #90caf9; font-weight: 500; flex: 1; min-width: 160px; }
+.spp-files { color: #ccc; }
+.spp-speed { color: #a5d6a7; font-family: monospace; font-size: 11px; }
+.spp-eta   { color: #ffcc80; font-size: 11px; }
+.spp-file  { margin-top: 4px; color: #546e7a; font-family: monospace; font-size: 10px;
+             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 600px; }
 #sync-table tr.row-na td { background: #0a160a; }
 #sync-table tr.row-na .col-month { color: #66bb6a; }
 
@@ -738,7 +793,8 @@ body.extreme-zoom .photo-cell { contain: strict; }
   margin-bottom: 8px;
 }
 
-#server-url-input {
+#server-url-input,
+.settings-row input[type="text"] {
   flex: 1;
   background: #111;
   border: 1px solid #444;
@@ -747,6 +803,19 @@ body.extreme-zoom .photo-cell { contain: strict; }
   padding: 8px 12px;
   font-size: 14px;
   font-family: inherit;
+  min-width: 0;
+}
+
+.settings-label-small {
+  font-size: 11px;
+  color: #666;
+  margin: -4px 0 8px;
+}
+
+#ssh-status {
+  font-size: 12px;
+  margin: 4px 0 0;
+  min-height: 16px;
 }
 
 #settings-content button {
@@ -780,6 +849,124 @@ body.extreme-zoom .photo-cell { contain: strict; }
   background: #8ab4f8 !important;
   color: #000 !important;
   font-weight: 600;
+}
+
+/* ── SSH / Sync Settings panel ── */
+#ssh-settings-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#ssh-settings-panel.hidden { display: none; }
+
+#ssh-settings-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+}
+
+#ssh-settings-content {
+  position: relative;
+  z-index: 1;
+  background: #1a1f2e;
+  border: 1px solid #2a4060;
+  border-radius: 12px;
+  padding: 28px 32px;
+  color: #ddd;
+  min-width: 420px;
+  max-width: 520px;
+}
+
+#ssh-settings-content h2 {
+  margin: 0 0 20px;
+  font-size: 20px;
+  color: #90caf9;
+}
+
+#ssh-settings-content label {
+  display: block;
+  font-size: 11px;
+  color: #7090b0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+#ssh-settings-content hr {
+  border: none;
+  border-top: 1px solid #2a3a50;
+  margin: 18px 0;
+}
+
+/* Two-column field layout */
+.ssh-field-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.ssh-field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ssh-field-sm { flex: 0 0 80px; }
+.ssh-field-label {
+  font-size: 11px;
+  color: #5a7a9a;
+}
+.ssh-field input {
+  background: #0e1520;
+  border: 1px solid #2a4060;
+  border-radius: 6px;
+  color: #e0e8f0;
+  padding: 9px 12px;
+  font-size: 14px;
+  font-family: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+.ssh-field input:focus {
+  outline: none;
+  border-color: #5090d0;
+  background: #111c2a;
+}
+.ssh-field input::placeholder { color: #3a5a7a; }
+
+#ssh-settings-content .settings-row {
+  margin-bottom: 0;
+}
+#ssh-settings-content .settings-row button {
+  background: #1e3050;
+  border: 1px solid #2a5080;
+  border-radius: 6px;
+  color: #90caf9;
+  padding: 9px 18px;
+  cursor: pointer;
+  font-size: 13px;
+}
+#ssh-settings-content .settings-row button:hover { background: #253a60; }
+
+#ssh-settings-content #ssh-status {
+  font-size: 12px;
+  margin: 8px 0 0;
+  min-height: 16px;
+}
+
+#close-ssh-settings-btn {
+  width: 100%;
+  margin-top: 4px;
+  background: #8ab4f8 !important;
+  border: none !important;
+  border-radius: 6px;
+  color: #000 !important;
+  font-weight: 600;
+  padding: 10px;
+  cursor: pointer;
+  font-size: 14px;
 }
 
 

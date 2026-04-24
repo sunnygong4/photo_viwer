@@ -87,11 +87,23 @@
       if (matched) {
         actionTd.innerHTML = `<span class="sync-ok">✓</span>`;
       } else {
+        const serverExtra = server && server.fileCount > local.fileCount;
         const missing = server ? (local.fileCount - server.fileCount) : local.fileCount;
-        const label = missing > 0 ? `↑ ${missing} files` : "↑ Sync";
-        actionTd.innerHTML = `<button class="sync-month-btn" data-month="${name}">${label}</button>`;
-        const btn = actionTd.querySelector(".sync-month-btn");
-        if (btn) btn.onclick = (e) => { e.stopPropagation(); startMonthSync(name); };
+        let html = "";
+        if (missing > 0) {
+          html += `<button class="sync-month-btn" data-month="${name}">↑ ${missing} files</button>`;
+        } else if (!matched) {
+          html += `<button class="sync-month-btn" data-month="${name}">↑ Sync</button>`;
+        }
+        if (serverExtra) {
+          const extras = server.fileCount - local.fileCount;
+          html += `<button class="sync-clean-btn" data-month="${name}" title="Delete ${extras} server-only files not on local disk">🗑 ${extras} extra</button>`;
+        }
+        actionTd.innerHTML = html;
+        const syncBtn  = actionTd.querySelector(".sync-month-btn");
+        const cleanBtn = actionTd.querySelector(".sync-clean-btn");
+        if (syncBtn)  syncBtn.onclick  = (e) => { e.stopPropagation(); startMonthSync(name); };
+        if (cleanBtn) cleanBtn.onclick = (e) => { e.stopPropagation(); startServerClean(name); };
       }
     }
   }
@@ -192,6 +204,24 @@
   }
 
   // ── Month-level sync ───────────────────────────────────────────────
+  function fmtBytes(b) {
+    if (b == null || isNaN(b)) return "—";
+    if (b >= 1e9) return (b / 1e9).toFixed(2) + " GB";
+    if (b >= 1e6) return (b / 1e6).toFixed(1) + " MB";
+    if (b >= 1e3) return (b / 1e3).toFixed(0) + " KB";
+    return b + " B";
+  }
+  function fmtSpeed(bps) {
+    if (!bps || bps < 0) return "";
+    return fmtBytes(bps) + "/s";
+  }
+  function fmtEta(secs) {
+    if (!isFinite(secs) || secs < 0) return "";
+    if (secs < 60) return `${Math.ceil(secs)}s`;
+    if (secs < 3600) return `${Math.floor(secs / 60)}m ${Math.ceil(secs % 60)}s`;
+    return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
+  }
+
   async function startMonthSync(month) {
     const entry = months.get(month);
     if (!entry || entry.syncing) return;
@@ -200,36 +230,86 @@
     const actionTd = entry.monthTr.children[4];
     entry.monthTr.className = "month-row row-syncing";
 
+    // Insert a progress row directly below the month row
+    const progRow = document.createElement("tr");
+    progRow.className = "sync-progress-row";
+    progRow.innerHTML = `<td colspan="5"><div class="sync-progress-panel">
+      <div class="spp-bar-wrap"><div class="spp-bar" id="spp-bar-${month}"></div></div>
+      <div class="spp-details">
+        <span class="spp-day" id="spp-day-${month}">Connecting…</span>
+        <span class="spp-files" id="spp-files-${month}"></span>
+        <span class="spp-speed" id="spp-speed-${month}"></span>
+        <span class="spp-eta" id="spp-eta-${month}"></span>
+      </div>
+      <div class="spp-file" id="spp-file-${month}"></div>
+    </div></td>`;
+    entry.monthTr.after(progRow);
+
+    const barEl   = () => document.getElementById(`spp-bar-${month}`);
+    const dayEl   = () => document.getElementById(`spp-day-${month}`);
+    const filesEl = () => document.getElementById(`spp-files-${month}`);
+    const speedEl = () => document.getElementById(`spp-speed-${month}`);
+    const etaEl   = () => document.getElementById(`spp-eta-${month}`);
+    const fileEl  = () => document.getElementById(`spp-file-${month}`);
+
+    let startTime = null, totalBytesToSync = 0;
+
     window.scloud.offMonthProgress();
     window.scloud.onMonthProgress((msg) => {
       if (msg.month !== month) return;
-      if (msg.phase === "day-start") {
-        actionTd.innerHTML = `<span class="sync-in-progress">↑ ${msg.day} (${msg.srcCount - msg.destCount} new)</span>`;
+
+      if (msg.phase === "queued") {
+        dayEl() && (dayEl().textContent = "⏳ Queued — waiting for another sync to finish…");
+        actionTd.innerHTML = `<span class="sync-in-progress">queued</span>`;
+
+      } else if (msg.phase === "connecting") {
+        dayEl() && (dayEl().textContent = "🔌 Connecting to server…");
+        actionTd.innerHTML = `<span class="sync-in-progress">connecting…</span>`;
+
+      } else if (msg.phase === "scanning") {
+        dayEl() && (dayEl().textContent = "Scanning days…");
+
+      } else if (msg.phase === "start") {
+        startTime = Date.now();
+        totalBytesToSync = msg.totalBytesToSync || 0;
+        actionTd.innerHTML = `<span class="sync-in-progress">uploading…</span>`;
+        dayEl() && (dayEl().textContent = `0 / ${msg.totalFilesToSync} files`);
+
+      } else if (msg.phase === "day-start") {
+        dayEl() && (dayEl().textContent = `📁 ${msg.day}  (${msg.filesNeeded} new files)`);
+        fileEl() && (fileEl().textContent = "");
+
       } else if (msg.phase === "day-skip") {
-        actionTd.innerHTML = `<span class="sync-in-progress">✓ ${msg.day}</span>`;
+        dayEl() && (dayEl().textContent = `✓ ${msg.day} — already synced`);
+
       } else if (msg.phase === "day-progress") {
-        const fname = msg.filename ? `<span class="sync-filename" title="${msg.filename}">${msg.filename}</span>` : "";
-        actionTd.innerHTML = `<span class="sync-in-progress">+${msg.copied} ${fname}</span>`;
+        const elapsed = (Date.now() - startTime) / 1000;
+        const bps     = elapsed > 0.5 ? msg.totalBytes / elapsed : 0;
+        const remain  = bps > 0 ? (msg.totalBytesToSync - msg.totalBytes) / bps : 0;
+        const pct     = msg.totalBytesToSync > 0
+          ? Math.min(100, (msg.totalBytes / msg.totalBytesToSync) * 100) : 0;
+
+        barEl()   && (barEl().style.width = pct.toFixed(1) + "%");
+        filesEl() && (filesEl().textContent = `${msg.totalCopied} files · ${fmtBytes(msg.totalBytes)} / ${fmtBytes(msg.totalBytesToSync)}`);
+        speedEl() && (speedEl().textContent = fmtSpeed(bps));
+        etaEl()   && (etaEl().textContent   = remain > 0 ? `ETA ${fmtEta(remain)}` : "");
+        fileEl()  && (fileEl().textContent  = msg.filename || "");
+        actionTd.innerHTML = `<span class="sync-in-progress">${pct.toFixed(0)}%</span>`;
+
       } else if (msg.phase === "done") {
         entry.syncing = false;
-        // Update local stats from the refreshed scan returned by main process
-        if (msg.refreshedLocal) {
-          entry.local = msg.refreshedLocal;
-        }
-        // Clear server stats so next updateMonthRow shows "refreshing"
+        progRow.remove();
+        if (msg.refreshedLocal) entry.local = msg.refreshedLocal;
         entry.server = null;
         entry.monthTr.children[3].innerHTML = `<span class="stat-loading">refreshing…</span>`;
-        actionTd.innerHTML = `<span class="sync-ok">✓ +${msg.totalCopied}</span>`;
+        actionTd.innerHTML = `<span class="sync-ok">✓ +${msg.totalCopied} files</span>`;
         window.scloud.offMonthProgress();
-        // Re-fetch server stats for this month only
         refreshMonthServerStats(month);
-        // If expanded, reload day data
-        if (entry.expanded) {
-          entry.dayRows.clear();
-          loadDayData(month);
-        }
+        if (entry.expanded) { entry.dayRows.clear(); loadDayData(month); }
+
       } else if (msg.phase === "aborted") {
         entry.syncing = false;
+        progRow.remove();
         updateMonthRow(month);
         window.scloud.offMonthProgress();
       }
@@ -238,6 +318,7 @@
     const result = await window.scloud.syncMonth(month);
     if (!result.ok) {
       entry.syncing = false;
+      progRow.remove();
       actionTd.innerHTML = `<span class="sync-error">${result.error}</span>`;
     }
   }
@@ -252,6 +333,68 @@
       const entry = months.get(month);
       if (entry) { entry.server = { sizeBytes, fileCount }; updateMonthRow(month); }
     } catch {}
+  }
+
+  // ── Server cleanup (delete server-only files not on local) ─────────
+  async function startServerClean(month) {
+    const entry = months.get(month);
+    if (!entry || entry.syncing) return;
+    const actionTd = entry.monthTr.children[4];
+    actionTd.innerHTML = `<span class="sync-in-progress">scanning server…</span>`;
+
+    const result = await window.scloud.findServerExtras(month);
+    if (!result.ok) {
+      actionTd.innerHTML = `<span class="sync-error">${result.error}</span>`;
+      setTimeout(() => updateMonthRow(month), 4000);
+      return;
+    }
+    if (result.extras.length === 0) {
+      actionTd.innerHTML = `<span class="sync-ok">✓ Nothing to clean</span>`;
+      setTimeout(() => updateMonthRow(month), 3000);
+      return;
+    }
+
+    // Show confirmation modal
+    const totalSize = result.extras.reduce((s, f) => s + f.size, 0);
+    const modal = document.createElement("div");
+    modal.className = "clean-modal-overlay";
+    modal.innerHTML = `
+      <div class="clean-modal">
+        <h3>⚠️ Delete ${result.extras.length} server-only files?</h3>
+        <p>These files exist on the server for <strong>${month}</strong> but are <strong>not on your local P:\\ drive</strong>.</p>
+        <p>Total: <strong>${fmtBytes(totalSize)}</strong> in ${result.extras.length} files</p>
+        <div class="clean-modal-list">
+          ${result.extras.slice(0, 50).map(f => `<div class="clean-modal-file">🗑 ${f.relPath} <span>${fmtBytes(f.size)}</span></div>`).join("")}
+          ${result.extras.length > 50 ? `<div class="clean-modal-file" style="color:#888">… and ${result.extras.length - 50} more</div>` : ""}
+        </div>
+        <p style="color:#ff8a65;font-size:12px">This cannot be undone. These files will be permanently deleted from the server.</p>
+        <div class="clean-modal-actions">
+          <button class="clean-cancel-btn">Cancel</button>
+          <button class="clean-confirm-btn">Delete ${result.extras.length} files</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+
+    await new Promise(resolve => {
+      modal.querySelector(".clean-cancel-btn").onclick = () => { modal.remove(); updateMonthRow(month); resolve(); };
+      modal.querySelector(".clean-confirm-btn").onclick = async () => {
+        modal.remove();
+        entry.syncing = true;
+        actionTd.innerHTML = `<span class="sync-in-progress">deleting…</span>`;
+        const del = await window.scloud.deleteServerExtras(result.extras.map(f => f.remotePath));
+        entry.syncing = false;
+        if (del.ok) {
+          actionTd.innerHTML = `<span class="sync-ok">✓ Deleted ${del.deleted}</span>`;
+          entry.server = null;
+          entry.monthTr.children[3].innerHTML = `<span class="stat-loading">refreshing…</span>`;
+          refreshMonthServerStats(month);
+        } else {
+          actionTd.innerHTML = `<span class="sync-error">${del.error}</span>`;
+          setTimeout(() => updateMonthRow(month), 4000);
+        }
+        resolve();
+      };
+    });
   }
 
   // ── Day-level sync ─────────────────────────────────────────────────

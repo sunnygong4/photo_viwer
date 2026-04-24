@@ -700,11 +700,16 @@ let zoomLevel = 1;
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 8;
 
+// Base display size captured the moment zoom first starts (at scale 1)
+let zoomBaseW = 0, zoomBaseH = 0;
+
 function resetZoom() {
   zoomLevel = 1;
   zoomed = false;
+  zoomBaseW = 0; zoomBaseH = 0;
+  lightboxImg.style.width = "";
+  lightboxImg.style.height = "";
   lightboxImg.style.transform = "";
-  lightboxImg.style.transformOrigin = "";
   lightboxImg.classList.remove("zoomed");
   imgContainer.scrollLeft = 0;
   imgContainer.scrollTop = 0;
@@ -712,40 +717,42 @@ function resetZoom() {
 }
 
 function applyZoom(clientX, clientY, newZoom) {
-  const oldZoom = zoomLevel;
   newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newZoom));
-  if (newZoom === oldZoom) return;
+  if (newZoom <= 1.05) { resetZoom(); return; }
 
-  const rect = imgContainer.getBoundingClientRect();
-  // Mouse position relative to the container
-  const mx = clientX - rect.left;
-  const my = clientY - rect.top;
+  // First zoom: capture the natural display size at scale=1
+  if (!zoomed) {
+    const r = lightboxImg.getBoundingClientRect();
+    zoomBaseW = r.width;
+    zoomBaseH = r.height;
+  }
 
-  // Current scroll + mouse = point in content space
-  const contentX = imgContainer.scrollLeft + mx;
-  const contentY = imgContainer.scrollTop + my;
-
-  // Where that point is in the image's natural coordinate space
-  const imgX = contentX / oldZoom;
-  const imgY = contentY / oldZoom;
+  const cr = imgContainer.getBoundingClientRect();
+  // Point under cursor in content space (before the new zoom)
+  const contentX = imgContainer.scrollLeft + (clientX - cr.left);
+  const contentY = imgContainer.scrollTop + (clientY - cr.top);
+  // Fraction along the current zoomed image
+  const oldW = zoomBaseW * zoomLevel;
+  const oldH = zoomBaseH * zoomLevel;
+  const fracX = contentX / oldW;
+  const fracY = contentY / oldH;
 
   zoomLevel = newZoom;
-
-  if (zoomLevel <= 1.05) {
-    resetZoom();
-    return;
-  }
+  const newW = zoomBaseW * newZoom;
+  const newH = zoomBaseH * newZoom;
 
   zoomed = true;
   lightboxImg.classList.add("zoomed");
   imgContainer.classList.add("zoomed");
-  lightboxImg.style.transform = `scale(${zoomLevel})`;
-  lightboxImg.style.transformOrigin = "0 0";
 
-  // Scroll so the same image point stays under the mouse
+  // Set real pixel size so native overflow/scroll works (CSS transform doesn't affect layout)
+  lightboxImg.style.width  = newW + "px";
+  lightboxImg.style.height = newH + "px";
+
+  // Scroll so the point under the cursor stays fixed
   requestAnimationFrame(() => {
-    imgContainer.scrollLeft = imgX * newZoom - mx;
-    imgContainer.scrollTop = imgY * newZoom - my;
+    imgContainer.scrollLeft = fracX * newW - (clientX - cr.left);
+    imgContainer.scrollTop  = fracY * newH - (clientY - cr.top);
   });
 }
 

@@ -29,11 +29,11 @@
 
   <div id="scroll-indicator" class="hidden"></div>
 
-  <!-- Settings panel -->
+  <!-- sCloud Settings panel -->
   <div id="settings-panel" class="hidden">
     <div id="settings-backdrop"></div>
     <div id="settings-content">
-      <h2>sCloud Settings</h2>
+      <h2>&#9881; sCloud Settings</h2>
       <label>Server URL</label>
       <div class="settings-row">
         <input type="text" id="server-url-input" placeholder="https://photos.sunnygong.com">
@@ -49,6 +49,63 @@
       </div>
       <hr>
       <button id="close-settings-btn">Close</button>
+    </div>
+  </div>
+
+  <!-- Sync / SSH Settings panel -->
+  <div id="ssh-settings-panel" class="hidden">
+    <div id="ssh-settings-backdrop"></div>
+    <div id="ssh-settings-content">
+      <h2>&#8645; Sync Settings</h2>
+
+      <label>Server Address</label>
+      <div class="ssh-field-row">
+        <div class="ssh-field">
+          <div class="ssh-field-label">IP / Hostname</div>
+          <input type="text" id="ssh-host" placeholder="100.72.90.36">
+        </div>
+        <div class="ssh-field ssh-field-sm">
+          <div class="ssh-field-label">Port</div>
+          <input type="text" id="ssh-port" placeholder="22">
+        </div>
+      </div>
+
+      <label style="margin-top:14px">Login</label>
+      <div class="ssh-field-row">
+        <div class="ssh-field">
+          <div class="ssh-field-label">Username</div>
+          <input type="text" id="ssh-user" placeholder="host">
+        </div>
+        <div class="ssh-field">
+          <div class="ssh-field-label">Password</div>
+          <input type="password" id="ssh-password" placeholder="••••••••">
+        </div>
+      </div>
+      <div class="settings-label-small">Password auth takes priority. Leave blank to use private key instead.</div>
+
+      <label style="margin-top:14px">Private Key <span style="font-weight:normal;color:#666">(only if no password)</span></label>
+      <div class="ssh-field-row">
+        <div class="ssh-field">
+          <div class="ssh-field-label">Key file path</div>
+          <input type="text" id="ssh-key" placeholder="C:\Users\you\.ssh\id_rsa">
+        </div>
+      </div>
+
+      <label style="margin-top:14px">Remote Path</label>
+      <div class="ssh-field-row">
+        <div class="ssh-field">
+          <div class="ssh-field-label">Photos root on server</div>
+          <input type="text" id="ssh-remote-path" placeholder="/mnt/nas/Photos">
+        </div>
+      </div>
+
+      <div class="settings-row" style="margin-top:16px">
+        <button id="ssh-save-btn">Save</button>
+        <button id="ssh-test-btn">Test Connection</button>
+      </div>
+      <div id="ssh-status"></div>
+      <hr>
+      <button id="close-ssh-settings-btn">Close</button>
     </div>
   </div>
 
@@ -79,7 +136,10 @@
           <h2>&#8645; Sync Photos</h2>
           <div id="sync-paths">P:\Photos &rarr; Z:\Photos</div>
         </div>
-        <button id="sync-close-btn" class="sync-close-btn">&#10005;</button>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button id="sync-ssh-settings-btn" title="SSH / SFTP Settings" style="background:#1e2a3a;border:1px solid #2a4060;border-radius:6px;color:#90caf9;font-size:13px;padding:5px 10px;cursor:pointer">&#9881; SSH</button>
+          <button id="sync-close-btn" class="sync-close-btn">&#10005;</button>
+        </div>
       </div>
       <div id="sync-summary"></div>
       <div id="sync-table-wrap">

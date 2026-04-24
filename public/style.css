@@ -277,9 +277,7 @@ body {
   position: fixed;
   inset: 0;
   z-index: 100;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  /* no flex — all children are position:absolute, flex was causing misalignment */
 }
 
 #lightbox.hidden {
@@ -292,42 +290,44 @@ body {
   background: rgba(0, 0, 0, 0.92);
 }
 
+/* Fills full viewport minus film strip at bottom */
 #lightbox-img-container {
   position: absolute;
-  inset: 0;
+  top: 0; left: 0; right: 0;
   bottom: 88px;
   z-index: 1;
   overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   cursor: default;
 }
 
 #lightbox-img-container.zoomed {
   overflow: auto;
-  align-items: flex-start;
-  justify-content: flex-start;
   cursor: grab;
 }
 #lightbox-img-container.zoomed:active { cursor: grabbing; }
-
 #lightbox-img-container::-webkit-scrollbar { display: none; }
 #lightbox-img-container { scrollbar-width: none; }
 
+/* Centered in the container using absolute + translate trick */
 #lightbox-img {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   max-width: 100%;
   max-height: 100%;
   width: auto;
   height: auto;
   object-fit: contain;
-  display: block;
   transition: opacity 0.2s;
   user-select: none;
   -webkit-user-drag: none;
 }
 
+/* When zoomed: JS sets explicit px dimensions, so drop the centering transform */
 #lightbox-img.zoomed {
+  position: static;
+  transform: none;
   max-width: none;
   max-height: none;
   cursor: grab;
