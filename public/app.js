@@ -622,6 +622,17 @@ async function openWithPhotoSwipe(index) {
     closeMetaPanel();
   });
 
+  // Fix aspect ratio: without width/height PhotoSwipe falls back to viewport
+  // size and stretches the image. After load, read real naturalWidth/Height
+  // and re-layout the slide with correct dimensions.
+  pswpInstance.on("loadComplete", (e) => {
+    const img = e.content?.element;
+    if (!img?.naturalWidth || e.content.data.width) return;
+    e.content.data.width = img.naturalWidth;
+    e.content.data.height = img.naturalHeight;
+    e.slide?.updateContentSize(true);
+  });
+
   pswpInstance.on("afterInit", () => {
     buildFilmStrip();
     filmStrip.classList.remove("hidden");
