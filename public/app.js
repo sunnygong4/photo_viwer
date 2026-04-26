@@ -573,15 +573,46 @@ async function openLightboxFromGrid(month, day, files, index) {
   await openWithPhotoSwipe(index);
 }
 
+// Cache image dimensions to avoid the lightbox stretching before loadComplete fires.
+// Map<photoUrl, {width, height}>
+const photoDimsCache = new Map();
+
+function preloadPhotoDims(src) {
+  if (photoDimsCache.has(src)) return Promise.resolve(photoDimsCache.get(src));
+  return new Promise((resolve) => {
+    const img = new Image();
+    const timer = setTimeout(() => resolve(null), 2000);
+    img.onload = () => {
+      clearTimeout(timer);
+      const d = { width: img.naturalWidth, height: img.naturalHeight };
+      photoDimsCache.set(src, d);
+      resolve(d);
+    };
+    img.onerror = () => { clearTimeout(timer); resolve(null); };
+    img.src = src;
+  });
+}
+
 async function openWithPhotoSwipe(index) {
   if (pswpInstance) { pswpInstance.destroy(); pswpInstance = null; }
 
   const PhotoSwipe = await getPhotoSwipe();
 
-  const items = currentFiles.map(f => ({
-    src: lbPhotoUrl(f),
-    alt: f,
-  }));
+  // Pre-fetch dims for the clicked image so the first slide opens at correct
+  // aspect ratio without a flash. Other images will be fixed via loadComplete.
+  const clickedSrc = lbPhotoUrl(currentFiles[index]);
+  await preloadPhotoDims(clickedSrc);
+
+  const items = currentFiles.map(f => {
+    const src = lbPhotoUrl(f);
+    const cached = photoDimsCache.get(src);
+    return {
+      src,
+      alt: f,
+      width:  cached ? cached.width  : 0,
+      height: cached ? cached.height : 0,
+    };
+  });
 
   pswpInstance = new PhotoSwipe({
     dataSource: items,
@@ -622,15 +653,45 @@ async function openWithPhotoSwipe(index) {
     closeMetaPanel();
   });
 
-  // Fix aspect ratio: without width/height PhotoSwipe falls back to viewport
-  // size and stretches the image. After load, read real naturalWidth/Height
-  // and re-layout the slide with correct dimensions.
+  // Fix aspect ratio: without correct width/height PhotoSwipe stretches the
+  // image to the viewport. When the real image loads, sync its naturalWidth/
+  // Height into the Content, the data source, AND the Slide instance, then
+  // recompute zoomLevels and re-render. (Updating only data.width is NOT
+  // enough — Slide caches width/height in its constructor.)
   pswpInstance.on("loadComplete", (e) => {
-    const img = e.content?.element;
-    if (!img?.naturalWidth || e.content.data.width) return;
-    e.content.data.width = img.naturalWidth;
-    e.content.data.height = img.naturalHeight;
-    e.slide?.updateContentSize(true);
+    const content = e.content;
+    const slide   = e.slide;
+    const img     = content?.element;
+    if (!img || !img.naturalWidth) return;
+
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+    if (content.width === w && content.height === h) return;
+
+    // 1) Content state
+    content.width  = w;
+    content.height = h;
+    if (content.data) {
+      content.data.width  = w;
+      content.data.height = h;
+    }
+
+    // 2) Slide state + recompute layout
+    if (slide) {
+      slide.width  = w;
+      slide.height = h;
+      slide.calculateSize();
+      slide.updateContentSize(true);
+      if (slide.isActive) {
+        slide.zoomAndPanToInitial();
+        slide.applyCurrentZoomPan();
+      }
+    }
+
+    // 3) Cache for next open
+    if (content.data?.src) {
+      photoDimsCache.set(content.data.src, { width: w, height: h });
+    }
   });
 
   pswpInstance.on("afterInit", () => {
