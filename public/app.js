@@ -598,19 +598,26 @@ async function openWithPhotoSwipe(index) {
 
   const PhotoSwipe = await getPhotoSwipe();
 
-  // Pre-fetch dims for the clicked image so the first slide opens at correct
-  // aspect ratio without a flash. Other images will be fixed via loadComplete.
-  const clickedSrc = lbPhotoUrl(currentFiles[index]);
-  await preloadPhotoDims(clickedSrc);
+  // Pre-fetch dims for the clicked image AND adjacent slides (PhotoSwipe
+  // preloads ±1 slide for swipe transitions). Critical: items[].width must
+  // be non-zero, otherwise PhotoSwipe's updateContentSize falls back to
+  // viewport size — `Math.round(0 * scale) || viewportSize.x` — and renders
+  // the image stretched to fill the viewport until loadComplete fires.
+  const preloadIdx = [index, index - 1, index + 1, index - 2, index + 2]
+    .filter(i => i >= 0 && i < currentFiles.length);
+  await Promise.all(preloadIdx.map(i => preloadPhotoDims(lbPhotoUrl(currentFiles[i]))));
 
+  // Default placeholder is 3:2 (most common photo aspect ratio). Even when
+  // wrong, the image renders at 3:2 fit instead of viewport-stretched. The
+  // loadComplete handler below overwrites with real dimensions on load.
   const items = currentFiles.map(f => {
     const src = lbPhotoUrl(f);
     const cached = photoDimsCache.get(src);
     return {
       src,
       alt: f,
-      width:  cached ? cached.width  : 0,
-      height: cached ? cached.height : 0,
+      width:  cached ? cached.width  : 1500,
+      height: cached ? cached.height : 1000,
     };
   });
 
