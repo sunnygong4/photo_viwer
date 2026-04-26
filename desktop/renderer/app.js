@@ -605,47 +605,8 @@ function preloadPhotoDims(src) {
   });
 }
 
-// Persist zoom + pan position across slide navigation. State is { level, cx, cy }
-// where cx, cy are the normalized (0-1) image coordinates currently centered in
-// the viewport. Re-applied to incoming slides so the user keeps looking at the
-// same relative point when arrow-navigating between zoomed images.
-let preservedZoom = null;
-let applyingPreserved = false;
-
-function captureZoomState(slide) {
-  if (!slide || !slide.width) return null;
-  const fit = slide.zoomLevels.fit;
-  if (slide.currZoomLevel <= fit + 0.001) return null; // not zoomed past fit
-  const w = slide.width * slide.currZoomLevel;
-  const h = slide.height * slide.currZoomLevel;
-  const vp = slide.pswp.viewportSize;
-  return {
-    level: slide.currZoomLevel,
-    cx: (vp.x / 2 - slide.pan.x) / w,
-    cy: (vp.y / 2 - slide.pan.y) / h,
-  };
-}
-
-function applyZoomState(slide, state) {
-  if (!slide || !slide.width || !state) return;
-  applyingPreserved = true;
-  slide.currZoomLevel = state.level;
-  slide.bounds.update(state.level);
-  const w = slide.width * state.level;
-  const h = slide.height * state.level;
-  const vp = slide.pswp.viewportSize;
-  slide.pan.x = vp.x / 2 - state.cx * w;
-  slide.pan.y = vp.y / 2 - state.cy * h;
-  // PhotoSwipe inverts naming: bounds.min = highest pan (no shift); bounds.max = most-shifted
-  slide.pan.x = Math.max(slide.bounds.max.x, Math.min(slide.bounds.min.x, slide.pan.x));
-  slide.pan.y = Math.max(slide.bounds.max.y, Math.min(slide.bounds.min.y, slide.pan.y));
-  slide.applyCurrentZoomPan();
-  setTimeout(() => { applyingPreserved = false; }, 50);
-}
-
 async function openWithPhotoSwipe(index) {
   if (pswpInstance) { pswpInstance.destroy(); pswpInstance = null; }
-  preservedZoom = null;
 
   const PhotoSwipe = await getPhotoSwipe();
 
@@ -704,31 +665,6 @@ async function openWithPhotoSwipe(index) {
     closeMetaPanel();
   });
 
-  // Capture zoom state from outgoing slide; apply to incoming slide so the user
-  // keeps looking at the same relative point when arrow-navigating.
-  pswpInstance.on("slideDeactivate", (e) => {
-    const captured = captureZoomState(e.slide);
-    if (captured) preservedZoom = captured;
-  });
-
-  pswpInstance.on("slideActivate", (e) => {
-    if (preservedZoom && e.slide?.width) applyZoomState(e.slide, preservedZoom);
-  });
-
-  // Track user-initiated zoom/pan; clear preserved when zoom returns to fit.
-  pswpInstance.on("zoomPanUpdate", (e) => {
-    if (applyingPreserved) return;
-    const slide = e.slide;
-    if (!slide || !slide.isActive) return;
-    const fit = slide.zoomLevels.fit;
-    if (slide.currZoomLevel <= fit + 0.001) {
-      preservedZoom = null;
-    } else {
-      const captured = captureZoomState(slide);
-      if (captured) preservedZoom = captured;
-    }
-  });
-
   // Fix aspect ratio: without correct width/height PhotoSwipe stretches the
   // image to the viewport. When the real image loads, sync its naturalWidth/
   // Height into the Content, the data source, AND the Slide instance, then
@@ -759,12 +695,8 @@ async function openWithPhotoSwipe(index) {
       slide.calculateSize();
       slide.updateContentSize(true);
       if (slide.isActive) {
-        if (preservedZoom) {
-          applyZoomState(slide, preservedZoom);
-        } else {
-          slide.zoomAndPanToInitial();
-          slide.applyCurrentZoomPan();
-        }
+        slide.zoomAndPanToInitial();
+        slide.applyCurrentZoomPan();
       }
     }
 
