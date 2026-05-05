@@ -55,7 +55,8 @@ body {
   accent-color: #8ab4f8;
 }
 
-#nav-toggle {
+#nav-toggle,
+#rescan-btn {
   background: none;
   border: none;
   color: #8ab4f8;
@@ -65,8 +66,24 @@ body {
   border-radius: 4px;
 }
 
-#nav-toggle:hover {
+#nav-toggle:hover,
+#rescan-btn:hover {
   background: rgba(138, 180, 248, 0.15);
+}
+
+#rescan-btn {
+  font-size: 18px;
+  display: inline-block;
+}
+
+#rescan-btn.spinning {
+  animation: rescan-spin 1.2s linear infinite;
+  cursor: wait;
+}
+
+@keyframes rescan-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
 }
 
 /* --- Gallery --- */

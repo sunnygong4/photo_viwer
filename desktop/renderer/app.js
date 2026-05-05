@@ -61,6 +61,45 @@ async function init() {
     gallery.innerHTML = '<div class="loading-msg">Failed to load photo library. Is the server running?</div>';
     console.error(err);
   }
+
+  // Manual rescan: forces server to re-walk the photo root and rebuilds the gallery.
+  // Server-side cache (/api/tree) is busted via ?refresh=1.
+  const rescanBtn = document.getElementById("rescan-btn");
+  if (rescanBtn) rescanBtn.addEventListener("click", rescanLibrary);
+}
+
+async function rescanLibrary() {
+  const btn = document.getElementById("rescan-btn");
+  if (!btn || btn.classList.contains("spinning")) return; // ignore re-clicks while in flight
+  btn.classList.add("spinning");
+  const prevTitle = btn.title;
+  btn.title = "Rescanning… (NAS scan can take a few minutes)";
+  const prevCount = photoCount.textContent;
+  photoCount.textContent = "Rescanning…";
+
+  try {
+    const res = await fetch(API_BASE + "/api/tree?refresh=1");
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const fresh = await res.json();
+
+    // Reset gallery state — buildGallery rebuilds DOM, so old element refs are gone.
+    treeData = fresh;
+    sectionElements.clear();
+    loadedSections.clear();
+    fileCache.clear();
+
+    photoCount.textContent = `Photos (${fresh.totalPhotos.toLocaleString()})`;
+    buildGallery(fresh);
+    buildTimelineNav(fresh);
+    checkVisibleSections();
+  } catch (err) {
+    console.error("Rescan failed:", err);
+    photoCount.textContent = prevCount;
+    alert("Rescan failed: " + err.message);
+  } finally {
+    btn.classList.remove("spinning");
+    btn.title = prevTitle;
+  }
 }
 
 // ===========================================
