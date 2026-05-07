@@ -191,67 +191,94 @@ app.get("/api/tree", async (req, res) => {
   }
 
   try {
+    const t0 = Date.now();
     const topEntries = await fs.readdir(PHOTOS_ROOT, { withFileTypes: true });
     const topDirs = topEntries.filter((e) => e.isDirectory()).map((e) => e.name).sort().reverse();
 
-    const timeline: any[] = [];
-    const collections: any[] = [];
-    let totalPhotos = 0;
-
-    for (const dir of topDirs) {
+    // Scan all top-level dirs in parallel, and within each dir scan all
+    // sub-folders in parallel. Replaces the previous sequential for-await
+    // loops which caused multi-minute hangs with large libraries.
+    const dirResults = await Promise.all(topDirs.map(async (dir) => {
       const isDateFolder = MONTH_PATTERN.test(dir);
       const fullPath = path.join(PHOTOS_ROOT, dir);
-      const entries = await fs.readdir(fullPath, { withFileTypes: true });
-      const subDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name).sort().reverse();
+
+      let entries: any[];
+      try {
+        entries = await fs.readdir(fullPath, { withFileTypes: true });
+      } catch {
+        return null; // skip unreadable dirs
+      }
+
+      const subDirs     = entries.filter((e) => e.isDirectory()).map((e) => e.name).sort().reverse();
       const directJpegs = entries.filter((e) => e.isFile() && isJpeg(e.name));
 
       if (isDateFolder) {
-        const year = parseInt(dir.slice(0, 4));
+        const year     = parseInt(dir.slice(0, 4));
         const monthNum = parseInt(dir.slice(5, 7));
-        const days: any[] = [];
+        let days: any[];
 
         if (subDirs.length > 0) {
-          // Has day subfolders
-          for (const sub of subDirs) {
-            const dayFiles = await fs.readdir(path.join(fullPath, sub));
-            const count = dayFiles.filter(isJpeg).length;
-            if (count > 0) {
-              days.push({ day: sub, count });
-              totalPhotos += count;
-            }
-          }
+          // Scan all day folders in parallel
+          const dayCounts = await Promise.all(subDirs.map(async (sub) => {
+            try {
+              const dayFiles = await fs.readdir(path.join(fullPath, sub));
+              const count = dayFiles.filter(isJpeg).length;
+              return count > 0 ? { day: sub, count } : null;
+            } catch { return null; }
+          }));
+          days = dayCounts.filter(Boolean) as any[];
         } else if (directJpegs.length > 0) {
-          // Flat folder with photos directly
-          days.push({ day: null, count: directJpegs.length });
-          totalPhotos += directJpegs.length;
+          days = [{ day: null, count: directJpegs.length }];
+        } else {
+          return null;
         }
 
-        if (days.length > 0) {
-          timeline.push({ month: dir, year, monthNum, monthName: MONTH_NAMES[monthNum], days });
-        }
+        return days.length > 0
+          ? { kind: "timeline" as const, month: dir, year, monthNum,
+              monthName: MONTH_NAMES[monthNum], days }
+          : null;
+
       } else {
         // Collection folder (e.g., Film.x)
-        const groups: any[] = [];
+        let groups: any[] = [];
         if (subDirs.length > 0) {
-          for (const sub of subDirs) {
-            const subFiles = await fs.readdir(path.join(fullPath, sub));
-            const count = subFiles.filter(isJpeg).length;
-            if (count > 0) {
-              groups.push({ subfolder: sub, count });
-              totalPhotos += count;
-            }
-          }
+          const groupCounts = await Promise.all(subDirs.map(async (sub) => {
+            try {
+              const subFiles = await fs.readdir(path.join(fullPath, sub));
+              const count = subFiles.filter(isJpeg).length;
+              return count > 0 ? { subfolder: sub, count } : null;
+            } catch { return null; }
+          }));
+          groups = groupCounts.filter(Boolean) as any[];
         }
         if (directJpegs.length > 0) {
           groups.push({ subfolder: null, count: directJpegs.length });
-          totalPhotos += directJpegs.length;
         }
-        if (groups.length > 0) {
-          collections.push({ name: dir, groups });
-        }
+        return groups.length > 0
+          ? { kind: "collection" as const, name: dir, groups }
+          : null;
+      }
+    }));
+
+    // Reassemble in original sorted order (topDirs was already sorted desc)
+    const timeline: any[]    = [];
+    const collections: any[] = [];
+    let totalPhotos = 0;
+
+    for (const r of dirResults) {
+      if (!r) continue;
+      if (r.kind === "timeline") {
+        const { kind, ...data } = r;
+        timeline.push(data);
+        totalPhotos += data.days.reduce((s: number, d: any) => s + d.count, 0);
+      } else {
+        const { kind, ...data } = r;
+        collections.push(data);
+        totalPhotos += data.groups.reduce((s: number, g: any) => s + g.count, 0);
       }
     }
 
+    console.log(`Tree scan complete in ${((Date.now() - t0) / 1000).toFixed(1)}s — ${totalPhotos} photos`);
     const result = { timeline, collections, totalPhotos };
     treeCache = { data: result, timestamp: Date.now() };
     res.json(result);
